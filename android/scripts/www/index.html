@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>Station Remote</title>
+<style>
+  body { margin: 0; background: #111; color: #eee; font-family: system-ui, sans-serif; }
+  h1 { font-size: 18px; text-align: center; padding: 12px 0 4px; margin: 0; color: #9ad; }
+  .wrap { max-width: 420px; margin: 0 auto; padding: 8px 12px 24px; }
+  .pad { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin: 10px 0; }
+  .row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin: 10px 0; }
+  a.btn, button.btn {
+    display: flex; align-items: center; justify-content: center;
+    background: #1f2937; color: #eee; text-decoration: none;
+    border: 1px solid #374151; border-radius: 12px;
+    padding: 16px 8px; font-size: 16px; font-weight: 600;
+    min-height: 52px; user-select: none;
+  }
+  a.btn:active, button.btn:active { background: #2563eb; }
+  .ok { background: #14532d; border-color: #166534; }
+  .small { font-size: 14px; padding: 12px 6px; min-height: 40px; }
+  input[type=text] {
+    width: 100%; box-sizing: border-box; padding: 12px; font-size: 16px;
+    border-radius: 10px; border: 1px solid #374151; background: #1f2937; color: #eee;
+  }
+  form { display: flex; gap: 8px; margin-top: 14px; }
+  form button { flex: 0 0 90px; }
+  .hint { color: #6b7280; font-size: 12px; text-align: center; margin-top: 14px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Пульт Станции 1</h1>
+
+  <div class="pad">
+    <span></span><a class="btn" href="/cgi-bin/k?k=up">▲</a><span></span>
+    <a class="btn" href="/cgi-bin/k?k=left">◀</a>
+    <a class="btn ok" href="/cgi-bin/k?k=ok">OK</a>
+    <a class="btn" href="/cgi-bin/k?k=right">▶</a>
+    <span></span><a class="btn" href="/cgi-bin/k?k=down">▼</a><span></span>
+  </div>
+
+  <div class="row">
+    <a class="btn small" href="/cgi-bin/k?k=back">Назад</a>
+    <a class="btn small" href="/cgi-bin/k?k=home">Домой</a>
+    <a class="btn small" href="/cgi-bin/k?k=play">Play/Pause</a>
+  </div>
+
+  <div class="row">
+    <a class="btn small" style="grid-column: 1 / -1" href="/cgi-bin/k?k=recents">Недавние приложения</a>
+  </div>
+
+  <div class="row">
+    <a class="btn small" href="/cgi-bin/k?k=voldown">Громкость −</a>
+    <a class="btn small" href="/cgi-bin/k?k=volup">Громкость +</a>
+    <a class="btn small" href="/cgi-bin/k?k=mute">Mute</a>
+  </div>
+
+  <div class="row">
+    <a class="btn small" href="/cgi-bin/k?k=tv">Projectivy</a>
+    <a class="btn small" href="/cgi-bin/k?k=youtube">YouTube</a>
+    <a class="btn small" href="/cgi-bin/k?k=settings">Настройки</a>
+  </div>
+
+  <form action="/cgi-bin/k" method="get">
+    <input type="text" name="t" placeholder="Текст для поиска (латиница)">
+    <button class="btn small" type="submit">Ввод</button>
+  </form>
+
+  <div class="hint">Порт 8080 • только локальная сеть</div>
+</div>
+</body>
+</html>

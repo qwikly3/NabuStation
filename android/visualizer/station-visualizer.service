@@ -1,0 +1,15 @@
+﻿[Unit]
+Description=NabuStation now-playing visualizer API
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/nabustation/visualizer
+EnvironmentFile=%h/nabustation/visualizer/visualizer.env
+ExecStart=%h/nabustation/visualizer/venv/bin/python %h/nabustation/visualizer/visualizer.py
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=default.target

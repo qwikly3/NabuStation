@@ -1,0 +1,15 @@
+# NabuStation: helpers shared by the voice packages.
+# Edit these in HA: Settings -> Devices & services -> Helpers.
+input_text:
+  nabustation_media_player:
+    name: NabuStation media player entity
+    max: 255
+    initial: media_player.station_1
+  nabustation_station_host:
+    name: NabuStation station IP/host
+    max: 255
+    initial: 192.168.1.10
+  nabustation_liked_playlist:
+    name: NabuStation Liked Songs URI
+    max: 255
+    initial: ""

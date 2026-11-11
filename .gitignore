@@ -1,0 +1,35 @@
+# Secrets and generated config
+.env
+*.env
+!*.env.example
+voice.env
+ha_token.txt
+cast_token.txt
+station_volume.txt
+nabustation.json
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+
+# Silero models / build output
+silero-tts/models/
+
+# Android build output
+android/remote/app/build/
+android/remote/app/station-remote-modes.apk
+android/daemon/build/
+android/nowplaying/nowplaying-*.apk
+
+# APKs live in GitHub Releases (see android/apk/README.md)
+android/apk/*.apk
+!android/apk/README.md
+!android/apk/SHA256SUMS
+
+# Logs and editor files
+*.log
+.DS_Store
+Thumbs.db

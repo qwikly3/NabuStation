@@ -1,0 +1,17 @@
+[Unit]
+Description=NabuStation voice satellite (Station 1 mic + Okay Nabu + HA Assist)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/nabustation/voice
+EnvironmentFile=%h/nabustation/voice/voice.env
+ExecStart=%h/nabustation/voice/venv/bin/python -u %h/nabustation/voice/station_voice.py
+Restart=always
+RestartSec=3
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target

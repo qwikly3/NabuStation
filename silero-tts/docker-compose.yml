@@ -1,0 +1,9 @@
+services:
+  silero-tts:
+    build: .
+    container_name: silero-tts
+    ports:
+      - "10400:8000"
+    volumes:
+      - ./models:/models
+    restart: unless-stopped

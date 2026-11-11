@@ -1,0 +1,179 @@
+# NabuStation: core music voice intents and scripts.
+# Requires the helpers package and a Music Assistant media_player entity.
+intent_script:
+  NabuMusicNext:
+    speech:
+      text: "Следующий трек."
+    action:
+      - action: script.nabustation_music_control
+        data:
+          action: next
+
+  NabuMusicPrevious:
+    speech:
+      text: "Предыдущий трек."
+    action:
+      - action: script.nabustation_music_control
+        data:
+          action: previous
+
+  NabuMusicPause:
+    speech:
+      text: "Пауза."
+    action:
+      - action: script.nabustation_music_control
+        data:
+          action: pause
+
+  NabuMusicPlay:
+    speech:
+      text: "Продолжаю."
+    action:
+      - action: script.turn_on
+        target:
+          entity_id: script.nabustation_music_resume
+
+  NabuMusicShuffle:
+    speech:
+      text: "Перемешиваю."
+    action:
+      - action: script.nabustation_music_shuffle
+        data:
+          enabled: true
+
+  NabuNowPlaying:
+    speech:
+      text: >-
+        {% set player = states('input_text.nabustation_media_player') %}
+        {% set artist = state_attr(player, 'media_artist') %}
+        {% set title = state_attr(player, 'media_title') %}
+        {% if artist %}Исполнитель: {{ artist }}. {% endif %}
+        {% if title %}Песня: {{ title }}.{% endif %}
+        {% if not artist and not title %}Ничего не играет.{% endif %}
+
+  NabuStopMusic:
+    speech:
+      text: ""
+    action:
+      - action: script.nabustation_music_control
+        data:
+          action: stop
+
+script:
+  nabustation_music_control:
+    alias: "NabuStation: music transport"
+    mode: single
+    fields:
+      action:
+        description: "play, pause, stop, next, previous, volume_up, volume_down, volume, mute, unmute"
+      level:
+        description: "Absolute volume 0..100 for action=volume"
+    sequence:
+      - variables:
+          player: "{{ states('input_text.nabustation_media_player') }}"
+      - choose:
+          - conditions: "{{ action | default('') == 'play' }}"
+            sequence:
+              - action: media_player.media_play
+                target:
+                  entity_id: "{{ player }}"
+          - conditions: "{{ action | default('') == 'pause' }}"
+            sequence:
+              - action: media_player.media_pause
+                target:
+                  entity_id: "{{ player }}"
+          - conditions: "{{ action | default('') == 'stop' }}"
+            sequence:
+              - action: media_player.media_stop
+                target:
+                  entity_id: "{{ player }}"
+          - conditions: "{{ action | default('') == 'next' }}"
+            sequence:
+              - action: media_player.media_next_track
+                target:
+                  entity_id: "{{ player }}"
+          - conditions: "{{ action | default('') == 'previous' }}"
+            sequence:
+              - action: media_player.media_previous_track
+                target:
+                  entity_id: "{{ player }}"
+          - conditions: >-
+              {{ action | default('') in ['volume_up', 'volume_down', 'volume', 'mute', 'unmute']
+                 and is_state('binary_sensor.nabustation_debian', 'on') }}
+            sequence:
+              - choose:
+                  - conditions: "{{ action == 'volume_up' }}"
+                    sequence:
+                      - action: rest_command.nabustation_station_volume_delta
+                        data:
+                          delta: 10
+                  - conditions: "{{ action == 'volume_down' }}"
+                    sequence:
+                      - action: rest_command.nabustation_station_volume_delta
+                        data:
+                          delta: -10
+                  - conditions: "{{ action == 'volume' and level is defined }}"
+                    sequence:
+                      - action: rest_command.nabustation_station_volume
+                        data:
+                          level: "{{ level | int(0) }}"
+                  - conditions: "{{ action == 'mute' }}"
+                    sequence:
+                      - action: rest_command.nabustation_station_mute
+                  - conditions: "{{ action == 'unmute' }}"
+                    sequence:
+                      - action: rest_command.nabustation_station_unmute
+                default: []
+          - conditions: "{{ action | default('') == 'volume_up' }}"
+            sequence:
+              - action: media_player.volume_up
+                target:
+                  entity_id: "{{ player }}"
+          - conditions: "{{ action | default('') == 'volume_down' }}"
+            sequence:
+              - action: media_player.volume_down
+                target:
+                  entity_id: "{{ player }}"
+          - conditions: "{{ action | default('') == 'mute' }}"
+            sequence:
+              - action: media_player.volume_mute
+                data:
+                  is_volume_muted: true
+                target:
+                  entity_id: "{{ player }}"
+          - conditions: "{{ action | default('') == 'unmute' }}"
+            sequence:
+              - action: media_player.volume_mute
+                data:
+                  is_volume_muted: false
+                target:
+                  entity_id: "{{ player }}"
+          - conditions: "{{ action | default('') == 'volume' and level is defined }}"
+            sequence:
+              - action: media_player.volume_set
+                data:
+                  volume_level: "{{ (level | float / 100) | round(2) }}"
+                target:
+                  entity_id: "{{ player }}"
+        default: []
+
+  nabustation_music_resume:
+    alias: "NabuStation: resume (non-blocking)"
+    mode: single
+    sequence:
+      - action: media_player.media_play
+        target:
+          entity_id: "{{ states('input_text.nabustation_media_player') }}"
+
+  nabustation_music_shuffle:
+    alias: "NabuStation: shuffle current queue"
+    mode: single
+    fields:
+      enabled:
+        description: "true = shuffle on"
+    sequence:
+      - action: media_player.shuffle_set
+        data:
+          shuffle: "{{ enabled | default(true) }}"
+        target:
+          entity_id: "{{ states('input_text.nabustation_media_player') }}"

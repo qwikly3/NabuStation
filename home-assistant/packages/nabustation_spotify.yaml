@@ -1,0 +1,39 @@
+# NabuStation: optional Spotify commands.
+# Requires Music Assistant + Spotify provider + the ma-spotify patch.
+intent_script:
+  NabuPlayMyMusic:
+    speech:
+      text: "Включаю."
+    action:
+      - action: script.turn_on
+        target:
+          entity_id: script.nabustation_music_play_my
+
+  NabuLike:
+    speech:
+      text: "Поставил лайк."
+    action:
+      - action: shell_command.nabustation_music_like
+
+  NabuUnlike:
+    speech:
+      text: "Убрал лайк."
+    action:
+      - action: shell_command.nabustation_music_unlike
+
+script:
+  nabustation_music_play_my:
+    alias: "NabuStation: play Liked Songs (non-blocking)"
+    mode: single
+    sequence:
+      - action: music_assistant.play_media
+        data:
+          media_id: "{{ states('input_text.nabustation_liked_playlist') }}"
+          media_type: playlist
+          enqueue: replace
+        target:
+          entity_id: "{{ states('input_text.nabustation_media_player') }}"
+
+shell_command:
+  nabustation_music_like: "python3 /config/scripts/music_like.py like"
+  nabustation_music_unlike: "python3 /config/scripts/music_like.py unlike"

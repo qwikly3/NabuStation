@@ -1,0 +1,37 @@
+#!/system/bin/sh
+# Web remote CGI: maps ?k=<key> to Android input, ?t=<text> to text input.
+export ANDROID_DATA=/data
+export ANDROID_ROOT=/system
+export ANDROID_STORAGE=/storage
+export PATH=/system/bin:/system/xbin
+BB=/system/bin/busybox-smp
+Q="$QUERY_STRING"
+
+case "$Q" in
+  k=up)      input keyevent 19 ;;
+  k=down)    input keyevent 20 ;;
+  k=left)    input keyevent 21 ;;
+  k=right)   input keyevent 22 ;;
+  k=ok)      input keyevent 23 ;;
+  k=back)    input keyevent 4 ;;
+  k=home)    input keyevent 3 ;;
+  k=recents) echo recents | $BB nc 127.0.0.1 8096 >/dev/null 2>&1 ;;
+  k=play)    input keyevent 85 ;;
+  k=volup)   echo volup | $BB nc 127.0.0.1 8096 >/dev/null 2>&1 ;;
+  k=voldown) echo voldown | $BB nc 127.0.0.1 8096 >/dev/null 2>&1 ;;
+  k=mute)    echo mute | $BB nc 127.0.0.1 8096 >/dev/null 2>&1 ;;
+  k=couchy)  monkey -p com.conreo.couchytv -c android.intent.category.LAUNCHER 1 ;;
+  k=tv)      am start -n com.spocky.projengmenu/com.spocky.projengmenu.ui.home.MainActivity ;;
+  k=settings) am start -a android.settings.SETTINGS ;;
+  k=youtube) monkey -p org.smarttube.stable -c android.intent.category.LAUNCHER 1 ;;
+  k=ha)      am start -n io.homeassistant.companion.android.minimal/io.homeassistant.companion.android.launch.LaunchActivity ;;
+  t=*)
+    raw="${Q#t=}"
+    raw=$($BB echo "$raw" | $BB sed 's/+/ /g')
+    text=$($BB httpd -d "$raw")
+    input text "$text"
+    ;;
+esac
+
+printf 'Content-Type: text/html\r\n\r\n'
+printf '<!DOCTYPE html><meta http-equiv="refresh" content="0; url=/"><body style="background:#111"></body>'

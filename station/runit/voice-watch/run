@@ -1,0 +1,3 @@
+#!/bin/sh
+[ -f /etc/nabustation/station.env ] && . /etc/nabustation/station.env
+exec /root/voice/watch.sh

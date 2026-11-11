@@ -1,0 +1,57 @@
+# NabuStation: optional Debian station volume control.
+# Requires the station volume service (port 8098) and the core package.
+rest_command:
+  nabustation_station_volume:
+    url: "http://{{ states('input_text.nabustation_station_host') }}:8098/volume?level={{ level | int(0) }}"
+    method: GET
+    timeout: 5
+  nabustation_station_volume_delta:
+    url: "http://{{ states('input_text.nabustation_station_host') }}:8098/volume?delta={{ delta | int(0) }}"
+    method: GET
+    timeout: 5
+  nabustation_station_mute:
+    url: "http://{{ states('input_text.nabustation_station_host') }}:8098/mute"
+    method: GET
+    timeout: 5
+  nabustation_station_unmute:
+    url: "http://{{ states('input_text.nabustation_station_host') }}:8098/unmute"
+    method: GET
+    timeout: 5
+
+binary_sensor:
+  - platform: rest
+    name: NabuStation Debian
+    unique_id: nabustation_debian
+    resource: "http://{{ states('input_text.nabustation_station_host') }}:8098/health"
+    value_template: "{{ 'on' if value_json.ok else 'off' }}"
+    scan_interval: 10
+
+intent_script:
+  NabuVolumeUp:
+    speech:
+      text: "Громче."
+    action:
+      - action: script.nabustation_music_control
+        data:
+          action: volume_up
+
+  NabuVolumeDown:
+    speech:
+      text: "Тише."
+    action:
+      - action: script.nabustation_music_control
+        data:
+          action: volume_down
+
+  NabuSetVolume:
+    speech:
+      text: "Громкость {{ level | int }}."
+    action:
+      - action: script.nabustation_music_control
+        data:
+          action: volume
+          level: "{{ level | int }}"
+
+  NabuVolumeAsk:
+    speech:
+      text: "На сколько процентов?"

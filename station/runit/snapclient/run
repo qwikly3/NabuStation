@@ -1,0 +1,12 @@
+#!/bin/sh
+[ -f /etc/nabustation/station.env ] && . /etc/nabustation/station.env
+
+SNAPCAST_HOST="${SNAPCAST_HOST:-127.0.0.1}"
+SNAPCAST_PORT="${SNAPCAST_PORT:-1704}"
+SNAPCAST_SOURCE="${SNAPCAST_SOURCE:-default}"
+HOSTID_ARG=""
+[ -n "$STATION_HOST_ID" ] && HOSTID_ARG="--hostID $STATION_HOST_ID"
+
+exec /usr/bin/snapclient \
+  -h "$SNAPCAST_HOST" -p "$SNAPCAST_PORT" $HOSTID_ARG \
+  -s "$SNAPCAST_SOURCE" --player alsa --mixer software
