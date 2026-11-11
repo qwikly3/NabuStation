@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.0.1 - 2026-11-11
+
+Quick wins after the first release.
+
+- Voice server HTTP control API on `:8090`: `/health`, `/ptt`, `/say`.
+- Phone remote 1.5: working PTT, SAY announcements, global PREV/PLAY/NEXT.
+- Music ducking without pause: Music Assistant volume 15% when the station is
+  louder than 15%, otherwise 5%; the station amplifier stays at 5%.
+- Home Assistant intents: queue next/remove/clear, repeat, restart, seek,
+  similar/radio, add-to-queue/play-next, time/weather/today, announce,
+  morning/night.
+- `music_queue.py` helper for Music Assistant queue operations.
+- Visualizer actions: repeat, restart, seek +/-30, similar, announce.
+- Roadmap saved in `ROADMAP.md`.
+
 ## 1.0.0 — 2026-11-11
 
 First public NabuStation release.

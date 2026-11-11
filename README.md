@@ -1,4 +1,4 @@
-# NabuStation 1.0
+# NabuStation 1.0.1
 
 Голосовой ассистент для **root-станции Яндекс Станция 1**: Debian-режим
 (микрофонный массив, wake word «Окей Набу», AEC, Home Assistant Assist,
@@ -9,10 +9,11 @@ Now Playing, SmartTube, Snapcast, телефонный пульт).
 Spotify и даже без музыки. Можно добавить музыку, громкость, LED-кольцо,
 физический диск, кнопку, Android TV/визуализатор и пульт.
 
-> Версия: **1.0.0**
+> Версия: **1.0.1**
 >
-> Статус: первый публичный релиз. Проверено на Station 1 с Debian,
-> Home Assistant 2026.7, Music Assistant server и Spotify Premium/Soloist.
+> Статус: быстрые победы после первого релиза. Проверено на Station 1 с
+> Debian, Home Assistant 2026.7, Music Assistant server и Spotify
+> Premium/Soloist.
 
 ---
 
@@ -40,6 +41,7 @@ Spotify и даже без музыки. Можно добавить музык�
 - [Безопасность](#безопасность)
 - [Обновление и удаление](#обновление-и-удаление)
 - [Ограничения версии 1.0](#ограничения-версии-10)
+- [Планы разработки](ROADMAP.md)
 - [Благодарности](#благодарности)
 - [Лицензия](#лицензия)
 
@@ -58,11 +60,19 @@ Spotify и даже без музыки. Можно добавить музык�
 - Музыка через **Music Assistant + Snapcast**; станция — обычный
   Snapcast-клиент.
 - Голосом: пауза, продолжить, дальше, назад, перемешать, что за трек.
+- Очередь: «что дальше», убрать следующий/текущий, очистить.
+- Repeat, перемотка ±10 секунд, «в начало», похожее/радио, добавить в очередь.
 - Spotify: поставить/убрать лайк, включить Liked Songs.
+- Погода, время, «что сегодня», «доброе утро» / «доброй ночи».
+- «Объяви …» и озвучка текста с телефона.
+- Дакинг музыки без паузы: Music Assistant volume 15% при громкой станции
+  и 5% при тихой; усилитель остаётся на 5%.
 - Громкость: HTTP-сервис на станции, физический диск, голосовые команды.
 - LED-кольцо и кнопка Алисы (опционально).
 - **Android TV-режим:** TV Launcher (Projectivy опционально), Now Playing, SmartTube 32.68,
   Snapcast, RemoteDaemon, телефонный пульт и веб-пульт.
+- **Телефонный пульт:** PTT, SAY, глобальные PREV/PLAY/NEXT, громкость,
+  режимы YOUTUBE/MUSIC/TV.
 - Всё ставится модулями: можно отказаться от Spotify, музыки, громкости
   или Android-режима.
 
@@ -116,7 +126,7 @@ RemoteDaemon `:8096`, touchpad `:8097` и веб-пульт `:8080`. Голос�
 | `voice-server/` | wake word, AEC, Assist, TTS-плеер | если не нужен голос |
 | `silero-tts/` | локальный русский TTS | если используете другой TTS |
 | `home-assistant/packages/nabustation_helpers.yaml` | helper-сущности | только если не нужен now playing/музыка |
-| `home-assistant/packages/nabustation_core.yaml` | pause/resume/next/prev/shuffle/now playing | если не нужна музыка |
+| `home-assistant/packages/nabustation_core.yaml` | pause/resume/next/prev/shuffle/now playing, queue, repeat, seek, similar, weather/time, announce | если не нужна музыка |
 | `home-assistant/packages/nabustation_volume.yaml` | громкость через HTTP станции | если нет Debian-громкости |
 | `home-assistant/packages/nabustation_spotify.yaml` | «включи музыку», like/unlike | если нет Spotify |
 | `home-assistant/custom_sentences/ru/*` | русские фразы | если другой язык |
@@ -389,6 +399,24 @@ AEC (хуже). Установите:
 sudo apt install libspeexdsp1
 ```
 
+#### HTTP-управление voice server
+
+На `CONTROL_PORT` (по умолчанию **8090**) voice server поднимает маленький
+API для пульта и HA:
+
+```bash
+curl http://<HA_IP>:8090/health
+curl -X POST http://<HA_IP>:8090/ptt
+curl -X POST 'http://<HA_IP>:8090/say?text=Привет'
+```
+
+- `/health` — состояние (`wake` / `listen` / `process`) и `speaking`;
+- `/ptt` — начать голосовой ход, как кнопка Алисы;
+- `/say` — озвучить текст (query `?text=`, plain body или JSON).
+
+Порт 8090 свободен на HA-хосте; 8097 там занят Snapcast. На самой станции
+8097 — это touchpad, поэтому пульт ходит на `media_host:8090`.
+
 ### 5. Home Assistant
 
 Подробно: [`home-assistant/install.md`](home-assistant/install.md).
@@ -423,10 +451,12 @@ sudo apt install libspeexdsp1
    cp home-assistant/custom_sentences/ru/music_spotify.yaml /config/custom_sentences/ru/
    ```
 
-4. Для Spotify:
+4. Скрипты для очереди и Spotify:
 
    ```bash
    mkdir -p /config/scripts
+   cp home-assistant/scripts/music_queue.py /config/scripts/
+   # опционально, для Spotify like/unlike:
    cp home-assistant/scripts/music_like.py /config/scripts/
    cp home-assistant/nabustation.json.example /config/nabustation.json
    ```
@@ -441,7 +471,10 @@ sudo apt install libspeexdsp1
 
    - `input_text.nabustation_media_player` — ваш MA media_player;
    - `input_text.nabustation_station_host` — IP станции;
-   - `input_text.nabustation_liked_playlist` — URI Liked Songs (Spotify).
+   - `input_text.nabustation_voice_host` — IP voice server (обычно `127.0.0.1`);
+   - `input_text.nabustation_weather_entity` — weather-сущность;
+   - `input_text.nabustation_liked_playlist` — URI Liked Songs (Spotify);
+   - `input_text.nabustation_last_result` — оставить пустым.
 
 7. Включите `prefer_local_intents` в пайплайне Assist, чтобы фразы
    обрабатывались локально, без LLM.
@@ -525,7 +558,7 @@ APK лежат в GitHub Releases, не в git. Скачать их:
 ./android/scripts/fetch_apks.sh
 ```
 
-Release: **https://github.com/qwikly3/NabuStation/releases/tag/v1.0.0**
+Release: **https://github.com/qwikly3/NabuStation/releases/tag/v1.0.1**
 
 Кратко, на станции в Android с root/ADB:
 
@@ -544,7 +577,9 @@ PLAYER_ENTITY=media_player.station_1 \
 ```
 
 Телефонный пульт: `http://<STATION_IP>:8080/station-remote-modes.apk`.
-В приложении **SET** задайте IP станции и IP visualizer/HA.
+В приложении **SET** задайте IP станции и IP visualizer/HA. Пульт умеет
+PTT, озвучку текста (**ОЗВУЧИТЬ**), глобальные PREV/PLAY/NEXT, громкость
+и режимы YOUTUBE/MUSIC/TV.
 
 Если HA-хост не `192.168.1.20`, пропатчьте Now Playing APK:
 
@@ -561,9 +596,11 @@ ANDROID_HOME=/path/to/sdk python patch_host.py --host <13-char-ha-ip>
 Если не нужна и музыка:
 
 - не ставьте `snapclient` (`./station/install.sh --no-snapclient`);
-- не копируйте `nabustation_core.yaml`, `music_core.yaml` и helpers;
-- voice server всё равно работает: он просто не будет pause/resume
-  музыки (проверяет доступность `MUSIC_ENTITY`).
+- не копируйте `music_core.yaml`, Spotify-пакет и `music_queue.py`;
+- `nabustation_core.yaml` можно оставить ради времени, погоды и
+  объявлений; музыкальные интенты просто не будут работать без MA;
+- voice server всё равно работает: дакинг пропускается, если
+  `MUSIC_ENTITY` недоступен.
 
 Если нужна музыка, но не Spotify:
 
@@ -608,6 +645,10 @@ ANDROID_HOME=/path/to/sdk python patch_host.py --host <13-char-ha-ip>
 | `HA_TOKEN_FILE` | `.../ha_token.txt` | long-lived token |
 | `PIPELINE_NAME` | пусто | имя пайплайна; пусто = preferred |
 | `MUSIC_ENTITY` | `media_player.station_1` | MA-плеер |
+| `CONTROL_PORT` | `8090` | HTTP API пульта/HA |
+| `MUSIC_DUCK_LOUD` | `0.15` | MA volume при громкой станции |
+| `MUSIC_DUCK_QUIET` | `0.05` | MA volume при тихой станции |
+| `MUSIC_DUCK_THRESHOLD` | `15` | порог станции, % |
 | `SILERO_URL` | `http://127.0.0.1:10400/tts` | TTS |
 | `SILERO_VOICE` | `eugene` | голос |
 | `STATION_VOLUME_DEFAULT` | `5` | громкость, если файла ещё нет |
@@ -626,7 +667,10 @@ ANDROID_HOME=/path/to/sdk python patch_host.py --host <13-char-ha-ip>
 |---|---|
 | `input_text.nabustation_media_player` | `media_player.station_1` |
 | `input_text.nabustation_station_host` | `192.168.1.10` |
+| `input_text.nabustation_voice_host` | `127.0.0.1` |
+| `input_text.nabustation_weather_entity` | `weather.home` |
 | `input_text.nabustation_liked_playlist` | `library://playlist/12` |
+| `input_text.nabustation_last_result` | служебный, ответ последней команды |
 
 ---
 
@@ -641,7 +685,20 @@ ANDROID_HOME=/path/to/sdk python patch_host.py --host <13-char-ha-ip>
 | «дальше» / «следующий трек» | следующий |
 | «назад» / «предыдущий трек» | предыдущий |
 | «перемешай» | shuffle текущей очереди |
+| «что дальше» | следующий трек из очереди |
+| «убери следующий трек» | удалить следующий из очереди |
+| «убери текущий трек» | удалить текущий из очереди |
+| «повтори трек» / «повтори очередь» | repeat one / all |
+| «выключи повтор» | repeat off |
+| «в начало» | перемотка на 0 |
+| «перемотай вперёд» / «назад» | ±10 секунд |
+| «включи похожее» | MA radio mode по текущему треку |
+| «добавь в очередь …» | добавить трек по названию |
+| «поставь следующим …» | вставить трек после текущего |
 | «что за трек» / «что за песня» | «Исполнитель: … Песня: …» |
+| «который час» / «какая погода» / «что сегодня» | время, погода, сводка |
+| «объяви …» | TTS на станции |
+| «доброе утро» / «доброй ночи» | простые сценарии |
 | «поставь лайк» | Spotify Liked Songs + |
 | «убери лайк» | Spotify Liked Songs − |
 | «включи музыку» | Liked Songs (Spotify-модуль) |
@@ -702,6 +759,21 @@ Silero не любит латиницу: одиночные буквы и анг
 меняет `Subwoofer Master`/`Tweeters Master` на card 1. `dial.py` читает
 тот же файл и синхронизирует физический диск. `station_voice.py` сначала
 пробует 8098, потом Android 8096.
+
+### Дакинг
+
+Во время wake/PTT/ответа музыка не ставится на паузу. Voice server
+понижает только громкость Music Assistant (поток музыки), а усилитель
+станции остаётся на 5%. Поэтому TTS слышно, а музыка продолжает играть
+тихо.
+
+- станция громче 15% → MA volume 15%;
+- станция тише 15% → MA volume 5%;
+- после ответа MA volume возвращается к 100%, а `_music_volume_guard`
+  снова держит его на 100%.
+
+Порог и уровни настраиваются в `voice.env`:
+`MUSIC_DUCK_THRESHOLD`, `MUSIC_DUCK_LOUD`, `MUSIC_DUCK_QUIET`.
 
 ---
 
@@ -802,7 +874,35 @@ curl 'http://<STATION_IP>:8098/volume?level=5'
 - `conversation.reload` и `intent_script.reload` после правок;
 - `prefer_local_intents: true` в пайплайне;
 - язык custom sentences — `ru`;
-- проверьте `conversation.process` в Developer Tools.
+- проверьте `conversation.process` в Developer Tools;
+- для фраз с `{query}`/`{message}` в custom sentences должен быть
+  `lists: { query: { wildcard: true } }` (иначе Hassil падает с
+  `MissingListError`).
+
+### Дакинг не работает
+
+```bash
+journalctl --user -u station-voice.service -f | grep -E 'music duck|music unduck'
+```
+
+- в `voice.env`/systemd-юните должен быть реальный `MUSIC_ENTITY`
+  (например `media_player.station_1`); иначе voice server не найдёт плеер;
+- проверьте `curl http://<STATION_IP>:8098/health` — уровень станции;
+- при станции >15% MA volume ставится 15%, иначе 5%;
+- `MUSIC_DUCK_THRESHOLD`, `MUSIC_DUCK_LOUD`, `MUSIC_DUCK_QUIET`.
+
+### PTT/SAY не работают
+
+```bash
+curl http://<HA_IP>:8090/health
+curl -X POST http://<HA_IP>:8090/ptt
+curl -X POST 'http://<HA_IP>:8090/say?text=проверка'
+```
+
+- voice server запущен и слушает `:8090`;
+- в пульте **media host** — IP HA-хоста, где стоит voice server;
+- если `/say` недоступен, APK fallback идёт напрямую в Silero `:10400`
+  и на станцию `:8092`.
 
 ---
 
@@ -867,6 +967,8 @@ rm ~/.config/systemd/user/station-voice.service
 - Русские custom sentences; для другого языка нужен перевод.
 - Один voice server на одну станцию (можно запустить несколько
   экземпляров с разными `voice.env` и портами).
+
+Планы и порядок версий: [`ROADMAP.md`](ROADMAP.md).
 
 ---
 

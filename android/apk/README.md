@@ -3,12 +3,12 @@
 The APKs are published as GitHub Release assets, not stored in git. This keeps
 the repository small and lets you update an APK without a new commit.
 
-Release: **https://github.com/qwikly3/NabuStation/releases/tag/v1.0.0**
+Release: **https://github.com/qwikly3/NabuStation/releases/tag/v1.0.1**
 
 | Asset | Package | Purpose |
 |---|---|---|
 | `nowplaying.apk` | `ru.station.nowplaying` | Now Playing kiosk (visualizer host placeholder) |
-| `station-remote-modes.apk` | `ru.station.remote` | Phone remote 1.4 |
+| `station-remote-modes.apk` | `ru.station.remote` | Phone remote 1.5 (PTT, SAY, global transport) |
 | `tvlauncher.apk` | `com.tvlauncher` | TV Launcher 1.6.2 (default launcher, GPL-3.0) |
 | `snapcast.apk` | `de.badaix.snapcast` | Snapcast Android client |
 | `smarttube-32.68.apk` | `org.smarttube.stable` | SmartTube 32.68 |

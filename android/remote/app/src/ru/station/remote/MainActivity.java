@@ -25,6 +25,7 @@ import android.widget.Toast;
 
 import java.io.BufferedReader;
 import java.io.BufferedWriter;
+import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.OutputStreamWriter;
@@ -32,6 +33,7 @@ import java.net.HttpURLConnection;
 import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.net.URL;
+import java.net.URLEncoder;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 
@@ -68,6 +70,7 @@ public class MainActivity extends Activity {
     private LinearLayout settingsRow;
     private LinearLayout textRow;
     private EditText textField;
+    private EditText announceField;
     private Thread volPoll;
     private Thread mediaPoll;
     private volatile boolean running = true;
@@ -163,6 +166,17 @@ public class MainActivity extends Activity {
         return "http://" + h + ":8099";
     }
 
+    private String controlBase() {
+        String h = getSharedPreferences("remote", MODE_PRIVATE)
+                .getString("media_host", DEFAULT_MEDIA_HOST);
+        return "http://" + h + ":8090";
+    }
+
+    private String mediaHost() {
+        return getSharedPreferences("remote", MODE_PRIVATE)
+                .getString("media_host", DEFAULT_MEDIA_HOST);
+    }
+
     private void startMediaPoll() {
         mediaPoll = new Thread(new Runnable() {
             @Override
@@ -228,6 +242,29 @@ public class MainActivity extends Activity {
             return sb.toString();
         } catch (Exception e) {
             return null;
+        } finally {
+            if (c != null) c.disconnect();
+        }
+    }
+
+    private boolean httpPost(String url, String body) {
+        HttpURLConnection c = null;
+        try {
+            c = (HttpURLConnection) new URL(url).openConnection();
+            c.setConnectTimeout(2500);
+            c.setReadTimeout(5000);
+            c.setRequestMethod("POST");
+            c.setDoOutput(true);
+            c.setRequestProperty("Content-Type", "text/plain; charset=utf-8");
+            byte[] data = body.getBytes("UTF-8");
+            c.setFixedLengthStreamingMode(data.length);
+            c.getOutputStream().write(data);
+            c.getOutputStream().flush();
+            c.getOutputStream().close();
+            int code = c.getResponseCode();
+            return code >= 200 && code < 300;
+        } catch (Exception e) {
+            return false;
         } finally {
             if (c != null) c.disconnect();
         }
@@ -393,6 +430,39 @@ public class MainActivity extends Activity {
         });
         ptt.addView(talk);
         root.addView(ptt);
+
+        LinearLayout sayRow = row();
+        announceField = new EditText(this);
+        announceField.setHint("Текст для станции");
+        announceField.setTextColor(TEXT);
+        announceField.setHintTextColor(MUTED);
+        announceField.setTextSize(15);
+        announceField.setSingleLine(true);
+        announceField.setInputType(InputType.TYPE_CLASS_TEXT);
+        announceField.setLayoutParams(new LinearLayout.LayoutParams(0, dp(48), 1f));
+        sayRow.addView(announceField);
+        Button say = makeButton("ОЗВУЧИТЬ", 0xFF2A2A35, TEXT, 48, 10);
+        say.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) {
+                v.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY);
+                announce(announceField.getText().toString());
+            }
+        });
+        sayRow.addView(say);
+        root.addView(sayRow);
+
+        // Global transport: visible in YOUTUBE, MUSIC and TV modes.
+        LinearLayout transport = row();
+        Button globalPrev = makeButton("PREV", BTN, TEXT, 44, 11);
+        musicClick(globalPrev, "previous");
+        transport.addView(globalPrev);
+        Button globalPlay = makeButton("PLAY/PAUSE", BTN, TEXT, 44, 9);
+        musicClick(globalPlay, "playpause");
+        transport.addView(globalPlay);
+        Button globalNext = makeButton("NEXT", BTN, TEXT, 44, 11);
+        musicClick(globalNext, "next");
+        transport.addView(globalNext);
+        root.addView(transport);
 
         LinearLayout modes = row();
         modeYoutube = makeButton("YOUTUBE", BTN, TEXT, 42, 11);
@@ -776,22 +846,93 @@ public class MainActivity extends Activity {
     }
 
     private void sendVoice() {
+        final String control = controlBase();
         final String host = hostField.getText().toString().trim();
         new Thread(new Runnable() {
             @Override
             public void run() {
-                Socket s = null;
-                try {
-                    s = new Socket();
-                    s.connect(new InetSocketAddress(host, 8094), 1500);
-                    s.getOutputStream().write("press\n".getBytes("UTF-8"));
-                    s.getOutputStream().flush();
-                } catch (Exception ignored) {
-                } finally {
-                    if (s != null) try { s.close(); } catch (Exception ignored) { }
+                boolean ok = httpPost(control + "/ptt", "");
+                if (!ok) {
+                    // Legacy station listener; kept for older installs.
+                    Socket s = null;
+                    try {
+                        s = new Socket();
+                        s.connect(new InetSocketAddress(host, 8094), 1500);
+                        s.getOutputStream().write("press\n".getBytes("UTF-8"));
+                        s.getOutputStream().flush();
+                        ok = true;
+                    } catch (Exception ignored) {
+                    } finally {
+                        if (s != null) try { s.close(); } catch (Exception ignored) { }
+                    }
+                }
+                if (!ok) {
+                    ui.post(new Runnable() {
+                        public void run() {
+                            Toast.makeText(MainActivity.this,
+                                    "Voice server :8090 недоступен",
+                                    Toast.LENGTH_SHORT).show();
+                        }
+                    });
                 }
             }
         }, "push-to-talk").start();
+    }
+
+    private void announce(String text) {
+        final String message = text.trim();
+        if (message.length() == 0) return;
+        announceField.setText("");
+        final String control = controlBase();
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                boolean ok = httpPost(control + "/say", message);
+                if (!ok) ok = speakDirect(message);
+                final boolean sent = ok;
+                ui.post(new Runnable() {
+                    public void run() {
+                        Toast.makeText(MainActivity.this,
+                                sent ? "Отправлено на станцию" : "Не удалось озвучить",
+                                Toast.LENGTH_SHORT).show();
+                    }
+                });
+            }
+        }, "announce").start();
+    }
+
+    /** Fallback: ask Silero for a WAV and stream it to the station player. */
+    private boolean speakDirect(String text) {
+        HttpURLConnection c = null;
+        Socket s = null;
+        try {
+            String url = "http://" + mediaHost() + ":10400/tts?text="
+                    + URLEncoder.encode(text, "UTF-8")
+                    + "&speaker=eugene&sr=48000";
+            c = (HttpURLConnection) new URL(url).openConnection();
+            c.setConnectTimeout(3000);
+            c.setReadTimeout(30000);
+            if (c.getResponseCode() != 200) return false;
+            InputStream in = c.getInputStream();
+            ByteArrayOutputStream buf = new ByteArrayOutputStream();
+            byte[] chunk = new byte[8192];
+            int n;
+            while ((n = in.read(chunk)) > 0) buf.write(chunk, 0, n);
+            in.close();
+            byte[] wav = buf.toByteArray();
+            if (wav.length < 44) return false;
+            String host = hostField.getText().toString().trim();
+            s = new Socket();
+            s.connect(new InetSocketAddress(host, 8092), 2000);
+            s.getOutputStream().write(wav);
+            s.getOutputStream().flush();
+            return true;
+        } catch (Exception e) {
+            return false;
+        } finally {
+            if (s != null) try { s.close(); } catch (Exception ignored) { }
+            if (c != null) c.disconnect();
+        }
     }
 
     private class TouchpadView extends View {

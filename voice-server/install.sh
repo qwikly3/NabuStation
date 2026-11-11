@@ -104,12 +104,17 @@ PLAY_PORT=8092
 LED_PORT=8093
 BUTTON_PORT=8095
 COMMAND_PORT=8096
+CONTROL_PORT=8090
+CONTROL_BIND=0.0.0.0
 DEBIAN_VOLUME_URL=http://$STATION_HOST:8098
 STATION_VOLUME_DEFAULT=5
 HA_HOST=$HA_HOST
 HA_TOKEN_FILE=$TOKEN_FILE
 PIPELINE_NAME=$PIPELINE_NAME
 MUSIC_ENTITY=$MUSIC_ENTITY
+MUSIC_DUCK_LOUD=0.15
+MUSIC_DUCK_QUIET=0.05
+MUSIC_DUCK_THRESHOLD=15
 SILERO_URL=$SILERO_URL
 SILERO_VOICE=eugene
 TTS_RATE=48000
@@ -139,6 +144,7 @@ echo
 echo "Voice server installed."
 echo "  Config:  $INSTALL_DIR/voice.env"
 echo "  Token:   $TOKEN_FILE"
+echo "  Control: http://<ha-host>:8090 (PTT/SAY/health)"
 echo "  Logs:    journalctl --user -u station-voice.service -f"
 echo
 echo "If the user service stops when you log out:"

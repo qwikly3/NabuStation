@@ -143,7 +143,21 @@ Open the app, press **SET**, set:
 - **media server ip** — HA host with the visualizer (default `192.168.1.20`).
 
 The app talks to `RemoteDaemon` on 8096, the touchpad on 8097, the visualizer
-on 8099 and the station web server on 8080.
+on 8099, the voice server control API on 8090 and the station web server on
+8080.
+
+### Phone remote 1.5
+
+- **PUSH TO TALK** sends `POST /ptt` to the voice server on the media host
+  (`http://<media_host>:8090/ptt`). If the voice server is unavailable, it
+  falls back to the old station `:8094` listener.
+- **ОЗВУЧИТЬ** sends the text to `POST /say` on the voice server. If that
+  fails, the app asks Silero directly (`:10400/tts`) and streams the WAV to
+  the station player (`:8092`).
+- **PREV / PLAY-PAUSE / NEXT** are always visible, in YOUTUBE, MUSIC and TV
+  modes. They call the visualizer `/api/music` endpoint.
+- The media host must run both the visualizer (`:8099`) and the voice server
+  control API (`:8090`). They normally live on the same HA host.
 
 ## 5. SmartTube 32.68
 

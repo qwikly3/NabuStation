@@ -35,6 +35,7 @@ fi
 HA_TOKEN_FILE="${HA_TOKEN_FILE:-$HOME/nabustation/voice/ha_token.txt}"
 PLAYER_ENTITY="${PLAYER_ENTITY:-media_player.station_1}"
 MUSIC_LIKED_URI="${MUSIC_LIKED_URI:-}"
+VOICE_CONTROL_URL="${VOICE_CONTROL_URL:-http://127.0.0.1:8090}"
 ask HA_TOKEN_FILE "HA long-lived token file" "$HOME/nabustation/voice/ha_token.txt"
 ask PLAYER_ENTITY "Music Assistant player entity" "media_player.station_1"
 ask MUSIC_LIKED_URI "Liked Songs URI (optional)" ""
@@ -54,6 +55,7 @@ HA_HTTP=http://127.0.0.1:8123
 HA_TOKEN_FILE=$HA_TOKEN_FILE
 PLAYER_ENTITY=$PLAYER_ENTITY
 MUSIC_LIKED_URI=$MUSIC_LIKED_URI
+VOICE_CONTROL_URL=$VOICE_CONTROL_URL
 PORT=$PORT
 EOF
 chmod 600 "$INSTALL_DIR/visualizer.env"

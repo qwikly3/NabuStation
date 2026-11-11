@@ -23,6 +23,7 @@ import wave
 import aiohttp
 import miniaudio
 import numpy as np
+from aiohttp import web
 from pyopen_wakeword import Model, OpenWakeWord, OpenWakeWordFeatures
 
 from aec import StreamAEC
@@ -43,6 +44,8 @@ PLAY_PORT = int(os.environ.get("PLAY_PORT", "8092"))
 LED_PORT = int(os.environ.get("LED_PORT", "8093"))
 BUTTON_PORT = int(os.environ.get("BUTTON_PORT", "8095"))
 COMMAND_PORT = int(os.environ.get("COMMAND_PORT", "8096"))
+CONTROL_PORT = int(os.environ.get("CONTROL_PORT", "8090"))
+CONTROL_BIND = os.environ.get("CONTROL_BIND", "0.0.0.0")
 DEBIAN_VOLUME_URL = os.environ.get(
     "DEBIAN_VOLUME_URL", f"http://{STATION}:8098"
 )
@@ -88,6 +91,12 @@ STATION_VOLUME_FILE = os.environ.get(
     "STATION_VOLUME_FILE", os.path.expanduser("~/nabustation/voice/station_volume.txt")
 )
 MUSIC_FULL_VOLUME = 1.0
+# Music ducking while the assistant listens/speaks.  The station amplifier
+# volume stays untouched (music stays <= 5% there); only the Music Assistant
+# player volume is lowered, so TTS remains loud and music keeps playing.
+MUSIC_DUCK_LOUD = float(os.environ.get("MUSIC_DUCK_LOUD", "0.15"))
+MUSIC_DUCK_QUIET = float(os.environ.get("MUSIC_DUCK_QUIET", "0.05"))
+MUSIC_DUCK_THRESHOLD = int(os.environ.get("MUSIC_DUCK_THRESHOLD", "15"))
 WAKE_DUCK_RMS = float(os.environ.get("WAKE_DUCK_RMS", "800"))
 WAKE_DUCK_FRAMES = int(os.environ.get("WAKE_DUCK_FRAMES", "2"))
 WAKE_DUCK_MS = int(os.environ.get("WAKE_DUCK_MS", "1500"))
@@ -98,6 +107,10 @@ MUSIC_STOP_WORDS = (
     "паузу",
     "выключ",
     "не играй",
+    "доброй ночи",
+    "спокойной ночи",
+    "ночной режим",
+    "режим сна",
     "stop",
     "pause",
 )
@@ -505,7 +518,8 @@ class Agent:
             log.warning("Speex AEC unavailable (%s); using FIR", exc)
         self.music_silent_frames = 0
         self.music_hold_frames = 0
-        self.music_paused_by_us = False
+        self.music_ducked = False
+        self.music_duck_prev = MUSIC_FULL_VOLUME
         self.music_lock = asyncio.Lock()
         self.duck_frames = 0
         self.duck_until = 0.0
@@ -515,6 +529,7 @@ class Agent:
         self._spk_n = 0
         self.pipeline_id: str | None = None
         self.play_lock = asyncio.Lock()
+        self.announce_lock = asyncio.Lock()
         self.session: aiohttp.ClientSession | None = None
         self.tasks: set[asyncio.Task] = set()
         self._tts_gain_cache = TTS_GAIN
@@ -566,30 +581,89 @@ class Agent:
         except Exception:  # noqa: BLE001
             return None
 
-    async def _music_pause(self) -> None:
-        """Pause Station 1 music while the voice assistant is active."""
+    async def _music_volume(self) -> float | None:
+        """Read the Music Assistant player volume (0..1)."""
+        assert self.session
+        try:
+            async with self.session.get(
+                f"{HA_HTTP}/api/states/{MUSIC_ENTITY}",
+                headers={"Authorization": f"Bearer {self.token}"},
+                timeout=5,
+            ) as resp:
+                if resp.status != 200:
+                    return None
+                data = await resp.json()
+                level = (data.get("attributes") or {}).get("volume_level")
+                if isinstance(level, (int, float)):
+                    return float(level)
+        except Exception:  # noqa: BLE001
+            pass
+        return None
+
+    async def _station_volume_level(self) -> int | None:
+        """Current station amplifier level (0..100), Debian or Android."""
+        level = await self._debian_volume_level()
+        if level is not None:
+            return level
+        reply = await self._station_command("volget")
+        return self._parse_station_volume(reply)
+
+    async def _music_duck(self) -> None:
+        """Lower only the music stream while the assistant is active.
+
+        Music Assistant volume is dropped to 15% when the station is louder
+        than 15%, and to 5% when it is quieter.  The station amplifier stays
+        where the user set it, so TTS remains at the normal level and music
+        keeps playing quietly instead of pausing.
+        """
         async with self.music_lock:
-            if self.music_paused_by_us:
+            if self.music_ducked:
                 return
             state = await self._music_state()
             if state != "playing":
                 return
-            if await self._ha_call(
-                "media_player", "media_pause", {"entity_id": MUSIC_ENTITY}
-            ):
-                self.music_paused_by_us = True
-                log.info("music paused for voice")
-
-    async def _music_resume(self) -> None:
-        """Resume music that this process paused for a voice turn."""
-        async with self.music_lock:
-            if not self.music_paused_by_us:
+            previous = await self._music_volume()
+            if previous is None:
+                previous = MUSIC_FULL_VOLUME
+            station = await self._station_volume_level()
+            if station is not None and station > MUSIC_DUCK_THRESHOLD:
+                target = MUSIC_DUCK_LOUD
+            else:
+                target = MUSIC_DUCK_QUIET
+            if previous <= target:
+                log.info(
+                    "music duck: %.0f%% is already quiet (station %s%%)",
+                    previous * 100,
+                    station if station is not None else "?",
+                )
                 return
-            self.music_paused_by_us = False
             if await self._ha_call(
-                "media_player", "media_play", {"entity_id": MUSIC_ENTITY}
+                "media_player",
+                "volume_set",
+                {"entity_id": MUSIC_ENTITY, "volume_level": round(target, 2)},
             ):
-                log.info("music resumed after voice")
+                self.music_ducked = True
+                self.music_duck_prev = previous
+                log.info(
+                    "music duck: %.0f%% -> %.0f%% (station %s%%)",
+                    previous * 100,
+                    target * 100,
+                    station if station is not None else "?",
+                )
+
+    async def _music_unduck(self) -> None:
+        """Restore the Music Assistant volume changed by ``_music_duck``."""
+        async with self.music_lock:
+            if not self.music_ducked:
+                return
+            self.music_ducked = False
+            previous = self.music_duck_prev
+            if await self._ha_call(
+                "media_player",
+                "volume_set",
+                {"entity_id": MUSIC_ENTITY, "volume_level": round(previous, 2)},
+            ):
+                log.info("music unduck: restored %.0f%%", previous * 100)
 
     @staticmethod
     def _music_stop_requested(text: str) -> bool:
@@ -598,10 +672,10 @@ class Agent:
 
     async def _wake_feedback(self) -> None:
         loop = asyncio.get_running_loop()
-        # Keep the mic muted while the HA pause request is in flight so the
-        # last music frames do not land in the utterance.
+        # Keep the mic muted while the HA volume request is in flight so the
+        # last loud music frames do not land in the utterance.
         self.mute_until = loop.time() + 6.0
-        await self._music_pause()
+        await self._music_duck()
         self._listen_ts = loop.time() + self.ack_sec + 0.05
         self.mute_until = self._listen_ts
         log.info("wake sound (%.2fs)", self.ack_sec)
@@ -785,6 +859,11 @@ class Agent:
         assert self.session
         while True:
             try:
+                if self.music_ducked:
+                    # The duck target is intentionally below 100%; do not
+                    # fight it while the assistant is listening/speaking.
+                    await asyncio.sleep(5)
+                    continue
                 async with self.session.get(
                     f"{HA_HTTP}/api/states/{MUSIC_ENTITY}",
                     headers={"Authorization": f"Bearer {self.token}"},
@@ -1279,6 +1358,85 @@ class Agent:
             self._spawn(self._send_led("wake"))
             self._spawn(self._wake_feedback())
 
+    def force_listen(self) -> str:
+        """Start a voice turn from the phone PTT button or an HTTP call."""
+        if self.state == "process" or self.speaking:
+            self._barge_in(1.0)
+            return "barge"
+        if self.state == "wake":
+            self._on_button()
+            return "listen"
+        return self.state
+
+    async def announce(self, text: str) -> bool:
+        """Speak an arbitrary text on the station, then restore music.
+
+        Used by the phone SAY button and HA ``rest_command.nabustation_announce``.
+        The task runs in the background; the HTTP caller gets an immediate ack.
+        """
+        text = (text or "").strip()
+        if not text:
+            return False
+        async with self.announce_lock:
+            loop = asyncio.get_running_loop()
+            current = self.current_task
+            if current and not current.done():
+                current.cancel()
+                try:
+                    await current
+                except asyncio.CancelledError:
+                    pass
+                except Exception:  # noqa: BLE001
+                    log.debug("announce: previous turn ended with an error")
+            self.current_task = None
+            self.barge_in = False
+            self.state = "wake"
+            self.utterance = bytearray()
+            self.preroll.clear()
+            await self._stop_playback()
+            await asyncio.sleep(0.05)
+            was_ducked = self.music_ducked
+            await self._music_duck()
+            speech = normalize_numbers(
+                transliterate_latin(normalize_latin_letters(text))
+            )
+            sentences = split_sentences(speech)
+            log.info("announce: %s", speech)
+            self.state = "process"
+            self.process_started = loop.time()
+            self.speak_started = loop.time()
+            self.speaking = True
+            self.barge_gain = 0.0
+            self.barge_energy_frames = 0
+            self.ww.reset()
+            self.feat.reset()
+            self.last_detect = 0.0
+            try:
+                await self._send_led("speak")
+                gain = await self._tts_gain()
+                for sentence in sentences:
+                    self.speak_started = loop.time()
+                    wav = await self._synth_sentence(sentence, gain)
+                    if not self.speaking:
+                        break
+                    await self._send_wav(wav, tail=0.35)
+            except Exception:  # noqa: BLE001
+                log.exception("announcement failed")
+                return False
+            finally:
+                self.speaking = False
+                self.state = "wake"
+                self.process_started = 0.0
+                self.speak_started = 0.0
+                self.last_play_end = loop.time()
+                await self._send_led("off")
+                if not was_ducked:
+                    await self._music_unduck()
+                self.ww.reset()
+                self.feat.reset()
+                self.preroll.clear()
+        return True
+
     def feed(self, data: bytes, channels: int | None = None) -> None:
         ch = channels or CHANNELS
         mic_ch = 3 if ch >= 5 else 1
@@ -1461,7 +1619,7 @@ class Agent:
                 self.utterance = bytearray()
                 self.state = "wake"
                 self._spawn(self._send_led("off"))
-                self._spawn(self._music_resume())
+                self._spawn(self._music_unduck())
             return
 
         # "process": the AEC block above already handles barge-in while TTS
@@ -1543,15 +1701,10 @@ class Agent:
                     # Do not let the command tail / TV audio wake us again
                     # immediately after an explicit stop.
                     self.ignore_wake_until = asyncio.get_running_loop().time() + 2.5
-                if cmd is not None:
-                    # TV/Debian switch: do not bring music back.
-                    self.music_paused_by_us = False
-                elif self.music_paused_by_us:
-                    if self._music_stop_requested(user_text):
-                        # The user asked to pause/stop music; leave it paused.
-                        self.music_paused_by_us = False
-                    else:
-                        await self._music_resume()
+                # Restore the music volume even when the user asked to pause:
+                # the player is already paused, and the next resume should be
+                # at the original level.
+                await self._music_unduck()
                 await self._send_led("off")
                 self.ww.reset()
                 self.feat.reset()
@@ -1628,6 +1781,68 @@ class MicServer:
                 await asyncio.sleep(1)
 
 
+class ControlServer:
+    """HTTP control API for the phone remote and HA automations.
+
+    Endpoints (LAN only, no auth):
+      GET  /health  -> state/speaking
+      ANY  /ptt     -> start a voice turn (phone PUSH TO TALK)
+      ANY  /say     -> text in query (?text=), plain body or JSON {"text": ...}
+    """
+
+    def __init__(self, agent: Agent) -> None:
+        self.agent = agent
+
+    async def health(self, request: web.Request) -> web.Response:
+        return web.json_response(
+            {
+                "ok": True,
+                "state": self.agent.state,
+                "speaking": self.agent.speaking,
+            }
+        )
+
+    async def ptt(self, request: web.Request) -> web.Response:
+        result = self.agent.force_listen()
+        return web.json_response(
+            {"ok": result in ("listen", "listening", "barge"), "state": result}
+        )
+
+    async def say(self, request: web.Request) -> web.Response:
+        text = request.query.get("text", "")
+        if not text:
+            body = await request.text()
+            if "json" in (request.content_type or "").lower():
+                try:
+                    text = str((json.loads(body) or {}).get("text", ""))
+                except (TypeError, ValueError):
+                    text = ""
+            else:
+                text = body
+        text = text.strip()
+        if not text:
+            raise web.HTTPBadRequest(text="empty text")
+        self.agent._spawn(self.agent.announce(text))
+        return web.json_response({"ok": True, "queued": True, "chars": len(text)})
+
+    async def run(self) -> None:
+        app = web.Application()
+        app.router.add_get("/health", self.health)
+        app.router.add_route("*", "/ptt", self.ptt)
+        app.router.add_route("*", "/say", self.say)
+        runner = web.AppRunner(app)
+        await runner.setup()
+        site = web.TCPSite(runner, CONTROL_BIND, CONTROL_PORT)
+        await site.start()
+        log.info(
+            "control API on http://%s:%d (ptt, say, health)",
+            CONTROL_BIND,
+            CONTROL_PORT,
+        )
+        while True:
+            await asyncio.sleep(3600)
+
+
 async def main() -> None:
     logging.basicConfig(
         level=logging.INFO,
@@ -1643,8 +1858,16 @@ async def main() -> None:
     agent = Agent(token)
     await agent.start()
     server = MicServer(agent)
-    log.info("mic client -> %s:%d, playback target %s:%d", STATION, MIC_PORT, STATION, PLAY_PORT)
-    await server.run()
+    control = ControlServer(agent)
+    log.info(
+        "mic client -> %s:%d, playback target %s:%d, control :%d",
+        STATION,
+        MIC_PORT,
+        STATION,
+        PLAY_PORT,
+        CONTROL_PORT,
+    )
+    await asyncio.gather(server.run(), control.run())
 
 
 if __name__ == "__main__":

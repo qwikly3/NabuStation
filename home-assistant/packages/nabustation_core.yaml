@@ -59,15 +59,248 @@ intent_script:
         data:
           action: stop
 
+  # --- quick wins: queue / repeat / seek / similar ------------------------
+  NabuQueueNext:
+    speech:
+      text: >-
+        {{ states('input_text.nabustation_last_result')
+           if states('input_text.nabustation_last_result')
+              not in ['unknown', 'unavailable', ''] else 'Не знаю.' }}
+    action:
+      - action: script.nabustation_queue_what_next
+
+  NabuQueueRemoveNext:
+    speech:
+      text: "Убрал следующий трек."
+    action:
+      - action: shell_command.nabustation_queue_remove_next
+
+  NabuQueueRemoveCurrent:
+    speech:
+      text: "Убрал текущий трек."
+    action:
+      - action: shell_command.nabustation_queue_remove_current
+
+  NabuQueueClear:
+    speech:
+      text: "Очистил очередь."
+    action:
+      - action: shell_command.nabustation_queue_clear
+
+  NabuMusicRepeatOne:
+    speech:
+      text: "Повторяю трек."
+    action:
+      - action: script.nabustation_music_control
+        data:
+          action: repeat
+          mode: one
+
+  NabuMusicRepeatAll:
+    speech:
+      text: "Повторяю очередь."
+    action:
+      - action: script.nabustation_music_control
+        data:
+          action: repeat
+          mode: all
+
+  NabuMusicRepeatOff:
+    speech:
+      text: "Повтор выключен."
+    action:
+      - action: script.nabustation_music_control
+        data:
+          action: repeat
+          mode: off
+
+  NabuMusicRestart:
+    speech:
+      text: "С начала."
+    action:
+      - action: script.nabustation_music_seek
+        data:
+          absolute: 0
+
+  NabuMusicSeekForward:
+    speech:
+      text: "Вперёд."
+    action:
+      - action: script.nabustation_music_seek
+        data:
+          delta: 10
+
+  NabuMusicSeekBack:
+    speech:
+      text: "Назад."
+    action:
+      - action: script.nabustation_music_seek
+        data:
+          delta: -10
+
+  NabuPlaySimilar:
+    speech:
+      text: >-
+        {{ states('input_text.nabustation_last_result')
+           if states('input_text.nabustation_last_result')
+              not in ['unknown', 'unavailable', ''] else 'Включаю похожее.' }}
+    action:
+      - action: script.nabustation_music_similar
+
+  NabuAddToQueue:
+    speech:
+      text: >-
+        {{ states('input_text.nabustation_last_result')
+           if states('input_text.nabustation_last_result')
+              not in ['unknown', 'unavailable', ''] else 'Добавил.' }}
+    action:
+      - action: script.nabustation_music_search_enqueue
+        data:
+          query: "{{ query }}"
+          mode: add
+
+  NabuPlayNext:
+    speech:
+      text: >-
+        {{ states('input_text.nabustation_last_result')
+           if states('input_text.nabustation_last_result')
+              not in ['unknown', 'unavailable', ''] else 'Поставил следующим.' }}
+    action:
+      - action: script.nabustation_music_search_enqueue
+        data:
+          query: "{{ query }}"
+          mode: next
+
+  # --- quick wins: time / weather / today --------------------------------
+  NabuTime:
+    speech:
+      text: "Сейчас {{ now().strftime('%H:%M') }}."
+
+  NabuWeather:
+    speech:
+      text: >-
+        {% set configured = states('input_text.nabustation_weather_entity') %}
+        {% set fallback = (states.weather | map(attribute='entity_id') | list | first) if states.weather else '' %}
+        {% set entity = configured if configured not in ['', 'unknown', 'unavailable'] else fallback %}
+        {% if entity and entity not in ['unknown', 'unavailable'] %}
+        {% set temp = state_attr(entity, 'temperature') %}
+        {% set cond = states(entity) %}
+        {% set n = temp | round(0) | int if temp is not none else none %}
+        {% set unit = '' if n is none else ('градус' if n % 10 == 1 and n % 100 != 11 else ('градуса' if n % 10 in [2, 3, 4] and n % 100 not in [12, 13, 14] else 'градусов')) %}
+        {% set names = {
+          'clear-night': 'ясно', 'cloudy': 'облачно', 'fog': 'туман',
+          'hail': 'град', 'lightning': 'гроза',
+          'lightning-rainy': 'гроза с дождём',
+          'partlycloudy': 'переменная облачность',
+          'pouring': 'сильный дождь', 'rainy': 'дождь', 'snowy': 'снег',
+          'snowy-rainy': 'снег с дождём', 'sunny': 'солнечно',
+          'windy': 'ветрено', 'windy-variant': 'ветрено',
+          'exceptional': 'аномальная погода'
+        } %}
+        Сейчас {% if n is not none %}{{ n }} {{ unit }}{% endif %}{% if cond %}, {{ names.get(cond, cond) }}{% endif %}.
+        {% else %}
+        Погода недоступна.
+        {% endif %}
+
+  NabuToday:
+    speech:
+      text: >-
+        {% set configured = states('input_text.nabustation_weather_entity') %}
+        {% set fallback = (states.weather | map(attribute='entity_id') | list | first) if states.weather else '' %}
+        {% set entity = configured if configured not in ['', 'unknown', 'unavailable'] else fallback %}
+        {% set player = states('input_text.nabustation_media_player') %}
+        {% set days = ['понедельник', 'вторник', 'среда', 'четверг',
+                       'пятница', 'суббота', 'воскресенье'] %}
+        Сегодня {{ now().strftime('%d.%m.%Y') }}, {{ days[now().weekday()] }}.
+        {% if entity and entity not in ['unknown', 'unavailable'] %}
+        {% set temp = state_attr(entity, 'temperature') %}
+        {% set cond = states(entity) %}
+        {% set n = temp | round(0) | int if temp is not none else none %}
+        {% set unit = '' if n is none else ('градус' if n % 10 == 1 and n % 100 != 11 else ('градуса' if n % 10 in [2, 3, 4] and n % 100 not in [12, 13, 14] else 'градусов')) %}
+        {% set names = {
+          'clear-night': 'ясно', 'cloudy': 'облачно', 'fog': 'туман',
+          'hail': 'град', 'lightning': 'гроза',
+          'lightning-rainy': 'гроза с дождём',
+          'partlycloudy': 'переменная облачность',
+          'pouring': 'сильный дождь', 'rainy': 'дождь', 'snowy': 'снег',
+          'snowy-rainy': 'снег с дождём', 'sunny': 'солнечно',
+          'windy': 'ветрено', 'windy-variant': 'ветрено',
+          'exceptional': 'аномальная погода'
+        } %}
+        Погода: {% if n is not none %}{{ n }} {{ unit }}{% endif %}{% if cond %}, {{ names.get(cond, cond) }}{% endif %}.
+        {% endif %}
+        {% if is_state(player, 'playing') %}
+        Играет {{ state_attr(player, 'media_artist') }} — {{ state_attr(player, 'media_title') }}.
+        {% endif %}
+
+  # --- quick wins: announcements and simple scenes ----------------------
+  NabuAnnounce:
+    speech:
+      text: ""
+    action:
+      - action: rest_command.nabustation_announce
+        data:
+          message: "{{ message }}"
+
+  NabuMorning:
+    speech:
+      text: >-
+        Доброе утро.
+        {% set configured = states('input_text.nabustation_weather_entity') %}
+        {% set fallback = (states.weather | map(attribute='entity_id') | list | first) if states.weather else '' %}
+        {% set entity = configured if configured not in ['', 'unknown', 'unavailable'] else fallback %}
+        {% if entity and entity not in ['unknown', 'unavailable'] %}
+        {% set temp = state_attr(entity, 'temperature') %}
+        {% set n = temp | round(0) | int if temp is not none else none %}
+        {% set unit = '' if n is none else ('градус' if n % 10 == 1 and n % 100 != 11 else ('градуса' if n % 10 in [2, 3, 4] and n % 100 not in [12, 13, 14] else 'градусов')) %}
+        {% if n is not none %}На улице {{ n }} {{ unit }}.{% endif %}
+        {% endif %}
+    action:
+      - action: rest_command.nabustation_station_volume
+        data:
+          level: 5
+        continue_on_error: true
+      - action: script.nabustation_music_resume
+
+  NabuNight:
+    speech:
+      text: "Доброй ночи."
+    action:
+      - action: script.nabustation_music_control
+        data:
+          action: pause
+      - action: rest_command.nabustation_station_volume
+        data:
+          level: 5
+        continue_on_error: true
+
+rest_command:
+  nabustation_announce:
+    url: >-
+      http://{{ states('input_text.nabustation_voice_host')
+                 if states('input_text.nabustation_voice_host')
+                    not in ['unknown', 'unavailable', ''] else '127.0.0.1' }}:8090/say?text={{ message | urlencode }}
+    method: GET
+    timeout: 10
+
+shell_command:
+  nabustation_queue_remove_next: "python3 /config/scripts/music_queue.py remove_next"
+  nabustation_queue_remove_current: "python3 /config/scripts/music_queue.py remove_current"
+  nabustation_queue_clear: "python3 /config/scripts/music_queue.py clear"
+
 script:
   nabustation_music_control:
     alias: "NabuStation: music transport"
     mode: single
     fields:
       action:
-        description: "play, pause, stop, next, previous, volume_up, volume_down, volume, mute, unmute"
+        description: "play, pause, stop, next, previous, repeat, restart, seek_forward, seek_back, volume_up, volume_down, volume, mute, unmute"
       level:
         description: "Absolute volume 0..100 for action=volume"
+      mode:
+        description: "Repeat mode for action=repeat: off, all, one"
+      seconds:
+        description: "Seek step for action=seek_forward/seek_back (default 10)"
     sequence:
       - variables:
           player: "{{ states('input_text.nabustation_media_player') }}"
@@ -97,6 +330,28 @@ script:
               - action: media_player.media_previous_track
                 target:
                   entity_id: "{{ player }}"
+          - conditions: "{{ action | default('') == 'repeat' }}"
+            sequence:
+              - action: media_player.repeat_set
+                data:
+                  repeat: "{{ mode | default('off') }}"
+                target:
+                  entity_id: "{{ player }}"
+          - conditions: "{{ action | default('') == 'restart' }}"
+            sequence:
+              - action: script.nabustation_music_seek
+                data:
+                  absolute: 0
+          - conditions: "{{ action | default('') == 'seek_forward' }}"
+            sequence:
+              - action: script.nabustation_music_seek
+                data:
+                  delta: "{{ seconds | default(10) }}"
+          - conditions: "{{ action | default('') == 'seek_back' }}"
+            sequence:
+              - action: script.nabustation_music_seek
+                data:
+                  delta: "{{ 0 - (seconds | default(10) | float) }}"
           - conditions: >-
               {{ action | default('') in ['volume_up', 'volume_down', 'volume', 'mute', 'unmute']
                  and is_state('binary_sensor.nabustation_debian', 'on') }}
@@ -177,3 +432,148 @@ script:
           shuffle: "{{ enabled | default(true) }}"
         target:
           entity_id: "{{ states('input_text.nabustation_media_player') }}"
+
+  nabustation_music_seek:
+    alias: "NabuStation: seek / restart"
+    mode: single
+    fields:
+      delta:
+        description: "Relative seek in seconds (negative = back)"
+      absolute:
+        description: "Absolute position in seconds; overrides delta"
+    sequence:
+      - variables:
+          player: "{{ states('input_text.nabustation_media_player') }}"
+          position: "{{ state_attr(player, 'media_position') | float(0) }}"
+          duration: "{{ state_attr(player, 'media_duration') | float(0) }}"
+          target: >-
+            {% if absolute is defined and absolute is not none %}
+            {{ absolute | float }}
+            {% else %}
+            {{ (position | float) + (delta | default(0) | float) }}
+            {% endif %}
+      - action: media_player.media_seek
+        data:
+          seek_position: >-
+            {% set pos = [target | float, 0] | max %}
+            {% if duration > 0 %}
+            {{ [pos, duration - 1] | min }}
+            {% else %}
+            {{ pos }}
+            {% endif %}
+        target:
+          entity_id: "{{ player }}"
+
+  nabustation_queue_what_next:
+    alias: "NabuStation: describe the next queue item"
+    mode: single
+    sequence:
+      - variables:
+          player: "{{ states('input_text.nabustation_media_player') }}"
+      - action: music_assistant.get_queue
+        target:
+          entity_id: "{{ player }}"
+        response_variable: queue_data
+      - action: input_text.set_value
+        target:
+          entity_id: input_text.nabustation_last_result
+        data:
+          value: >-
+            {% set q = queue_data.get(player) if queue_data.get(player) else none %}
+            {% if q and q.next_item %}
+            {% set item = q.next_item %}
+            {% if item.media_item %}
+            Следующий: {{ item.media_item.artists | default([]) | map(attribute='name') | join(', ') }} — {{ item.media_item.name }}.
+            {% else %}
+            Следующий: {{ item.name }}.
+            {% endif %}
+            {% else %}
+            Очередь закончилась.
+            {% endif %}
+
+  nabustation_music_similar:
+    alias: "NabuStation: radio mode from the current track"
+    mode: single
+    sequence:
+      - variables:
+          player: "{{ states('input_text.nabustation_media_player') }}"
+      - action: music_assistant.get_queue
+        target:
+          entity_id: "{{ player }}"
+        response_variable: queue_data
+      - choose:
+          - conditions: >-
+              {{ queue_data.get(player) and queue_data[player].current_item
+                 and queue_data[player].current_item.media_item
+                 and queue_data[player].current_item.media_item.uri }}
+            sequence:
+              - action: music_assistant.play_media
+                target:
+                  entity_id: "{{ player }}"
+                data:
+                  media_id: "{{ queue_data[player].current_item.media_item.uri }}"
+                  media_type: "{{ queue_data[player].current_item.media_item.media_type }}"
+                  radio_mode: true
+                  enqueue: play
+              - action: input_text.set_value
+                target:
+                  entity_id: input_text.nabustation_last_result
+                data:
+                  value: >-
+                    Включаю похожее:
+                    {{ queue_data[player].current_item.media_item.artists | default([]) | map(attribute='name') | join(', ') }} — {{ queue_data[player].current_item.media_item.name }}.
+        default:
+          - action: input_text.set_value
+            target:
+              entity_id: input_text.nabustation_last_result
+            data:
+              value: "Нечего продолжать."
+
+  nabustation_music_search_enqueue:
+    alias: "NabuStation: add or play-next by name"
+    mode: queued
+    max: 3
+    fields:
+      query:
+        description: "Track / artist / album search text"
+      mode:
+        description: "add = to the end of the queue, next = after the current track"
+        default: add
+    sequence:
+      - variables:
+          player: "{{ states('input_text.nabustation_media_player') }}"
+      - action: media_player.search_media
+        target:
+          entity_id: "{{ player }}"
+        data:
+          search_query: "{{ query }}"
+          media_content_type: music
+        response_variable: search
+      - choose:
+          - conditions: >-
+              {{ search.get(player) and
+                 (search[player].result | selectattr('media_class', 'eq', 'track') | list | count) > 0 }}
+            sequence:
+              - action: media_player.play_media
+                target:
+                  entity_id: "{{ player }}"
+                data:
+                  media_content_id: >-
+                    {{ (search[player].result | selectattr('media_class', 'eq', 'track') | list | first).media_content_id }}
+                  media_content_type: >-
+                    {{ (search[player].result | selectattr('media_class', 'eq', 'track') | list | first).media_content_type }}
+                  enqueue: "{{ 'next' if (mode | default('add')) == 'next' else 'add' }}"
+              - action: input_text.set_value
+                target:
+                  entity_id: input_text.nabustation_last_result
+                data:
+                  value: >-
+                    {{ 'Поставил следующим' if (mode | default('add')) == 'next'
+                       else 'Добавил в очередь' }}:
+                    {{ (search[player].result | selectattr('media_class', 'eq', 'track') | list | first).title }}.
+        default:
+          - action: input_text.set_value
+            target:
+              entity_id: input_text.nabustation_last_result
+            data:
+              value: "Не нашёл такой трек."

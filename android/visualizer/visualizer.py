@@ -26,6 +26,7 @@ PORT = int(os.environ.get("PORT", "8099"))
 LRCLIB = "https://lrclib.net/api"
 USER_AGENT = "station-visualizer/1.0 (local home assistant)"
 MUSIC_LIKED_URI = os.environ.get("MUSIC_LIKED_URI", "")
+VOICE_CONTROL_URL = os.environ.get("VOICE_CONTROL_URL", "http://127.0.0.1:8090")
 
 TOKEN = Path(TOKEN_FILE).read_text(encoding="utf-8").strip()
 HEADERS = {"Authorization": f"Bearer {TOKEN}"}
@@ -231,8 +232,84 @@ async def health(request: web.Request) -> web.Response:
     return web.json_response({"ok": True, "state": data.get("state")})
 
 
+async def announce_text(text: str) -> web.Response:
+    async with aiohttp.ClientSession() as session:
+        try:
+            async with session.post(
+                f"{VOICE_CONTROL_URL}/say",
+                json={"text": text},
+                timeout=6,
+            ) as resp:
+                body = await resp.text()
+                return web.json_response(
+                    {
+                        "ok": 200 <= resp.status < 300,
+                        "status": resp.status,
+                        "body": body[:300],
+                    }
+                )
+        except Exception as exc:  # noqa: BLE001
+            return web.json_response(
+                {"ok": False, "error": f"voice server: {exc}"}, status=502
+            )
+
+
+async def play_similar() -> web.Response:
+    """Start Music Assistant radio mode from the current queue item."""
+    async with aiohttp.ClientSession() as session:
+        async with session.post(
+            f"{HA_HTTP}/api/services/music_assistant/get_queue?return_response",
+            json={"entity_id": PLAYER_ENTITY},
+            headers=HEADERS,
+            timeout=20,
+        ) as resp:
+            body = await resp.text()
+            if resp.status != 200:
+                return web.json_response(
+                    {"ok": False, "status": resp.status, "body": body[:300]},
+                    status=502,
+                )
+            data = json.loads(body)
+        queue = (data.get("service_response") or {}).get(PLAYER_ENTITY) or {}
+        media = ((queue.get("current_item") or {}).get("media_item") or {})
+        media_id = media.get("uri")
+        media_type = media.get("media_type")
+        if not media_id:
+            return web.json_response(
+                {"ok": False, "error": "nothing is playing"}, status=400
+            )
+        async with session.post(
+            f"{HA_HTTP}/api/services/music_assistant/play_media",
+            json={
+                "entity_id": PLAYER_ENTITY,
+                "media_id": media_id,
+                "media_type": media_type,
+                "radio_mode": True,
+                "enqueue": "play",
+            },
+            headers=HEADERS,
+            timeout=20,
+        ) as resp:
+            body = await resp.text()
+            return web.json_response(
+                {
+                    "ok": 200 <= resp.status < 300,
+                    "status": resp.status,
+                    "body": body[:300],
+                }
+            )
+
+
 async def music_action(request: web.Request) -> web.Response:
     action = request.query.get("action", "")
+    if action == "announce":
+        text = request.query.get("text", "").strip()
+        if not text:
+            raise web.HTTPBadRequest(text="text is required")
+        return await announce_text(text)
+    if action == "similar":
+        return await play_similar()
+
     domain = "media_player"
     service = ""
     data = {"entity_id": PLAYER_ENTITY}
@@ -244,17 +321,27 @@ async def music_action(request: web.Request) -> web.Response:
         service = "media_previous_track"
     elif action == "stop":
         service = "media_stop"
-    elif action in ("seekback", "seekfwd"):
+    elif action == "repeat":
+        mode = request.query.get("mode", "off")
+        if mode not in ("off", "all", "one"):
+            raise web.HTTPBadRequest(text="mode must be off, all or one")
+        service = "repeat_set"
+        data["repeat"] = mode
+    elif action in ("seekback", "seekfwd", "seekback30", "seekfwd30"):
         async with aiohttp.ClientSession() as session:
             state = await fetch_state(session)
         position = float(state.get("position") or 0)
         duration = float(state.get("duration") or 0)
-        target = position - 10.0 if action == "seekback" else position + 10.0
+        step = 30.0 if action.endswith("30") else 10.0
+        target = position - step if action.startswith("seekback") else position + step
         target = max(0.0, target)
         if duration > 0:
             target = min(target, max(0.0, duration - 1.0))
         service = "media_seek"
         data["seek_position"] = round(target, 1)
+    elif action in ("restart", "start"):
+        service = "media_seek"
+        data["seek_position"] = 0
     elif action == "liked":
         if not MUSIC_LIKED_URI:
             raise web.HTTPBadRequest(text="MUSIC_LIKED_URI is not configured")

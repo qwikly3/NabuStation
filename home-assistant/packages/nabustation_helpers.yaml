@@ -9,7 +9,19 @@ input_text:
     name: NabuStation station IP/host
     max: 255
     initial: 192.168.1.10
+  nabustation_voice_host:
+    name: NabuStation voice server IP/host
+    max: 255
+    initial: 127.0.0.1
+  nabustation_weather_entity:
+    name: NabuStation weather entity
+    max: 255
+    initial: weather.home
   nabustation_liked_playlist:
     name: NabuStation Liked Songs URI
+    max: 255
+    initial: ""
+  nabustation_last_result:
+    name: NabuStation last voice action result
     max: 255
     initial: ""

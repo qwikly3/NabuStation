@@ -22,8 +22,8 @@ Copy the files you need from `home-assistant/packages/`:
 
 | File | Needed for |
 |---|---|
-| `nabustation_helpers.yaml` | always (media player, station IP, Liked Songs URI) |
-| `nabustation_core.yaml` | music transport, shuffle, now playing |
+| `nabustation_helpers.yaml` | always (media player, station IP, voice host, weather, Liked Songs URI) |
+| `nabustation_core.yaml` | music transport, queue, repeat, seek, similar, weather/time, announcements |
 | `nabustation_volume.yaml` | voice volume through the Debian station service |
 | `nabustation_spotify.yaml` | "включи музыку", like/unlike |
 
@@ -44,7 +44,7 @@ Copy only the matching files to `/config/custom_sentences/ru/`:
 
 | File | Needed for |
 |---|---|
-| `music_core.yaml` | pause/resume/next/previous/shuffle/now playing/stop |
+| `music_core.yaml` | pause/resume/next/previous/shuffle/now playing/stop, queue, repeat, seek, similar, weather/time, announcements |
 | `volume.yaml` | "громкость 5", "громче", "тише" |
 | `music_spotify.yaml` | "включи музыку", "поставь лайк", "убери лайк" |
 
@@ -60,6 +60,7 @@ Only for the Spotify module:
 ```bash
 mkdir -p /config/scripts
 cp home-assistant/scripts/music_like.py /config/scripts/music_like.py
+cp home-assistant/scripts/music_queue.py /config/scripts/music_queue.py
 cp home-assistant/nabustation.json.example /config/nabustation.json
 ```
 
@@ -110,7 +111,10 @@ Settings -> Devices & services -> Helpers:
 |---|---|
 | `input_text.nabustation_media_player` | `media_player.station_1` |
 | `input_text.nabustation_station_host` | `192.168.1.10` (station IP) |
+| `input_text.nabustation_voice_host` | `127.0.0.1` (HA host with voice server) |
+| `input_text.nabustation_weather_entity` | `weather.home` |
 | `input_text.nabustation_liked_playlist` | `library://playlist/12` |
+| `input_text.nabustation_last_result` | leave empty (reply of the last command) |
 
 Find the Music Assistant player entity in Developer Tools -> States
 (search for the Station 1 player). Find the Liked Songs URI with
@@ -128,6 +132,22 @@ agent_id: conversation.home_assistant
 
 Or use the Assist dialog and type the command. You should get
 `Исполнитель: ... Песня: ...`.
+
+More checks:
+
+```yaml
+text: "что дальше"
+# -> следующий трек из очереди
+
+text: "какая погода"
+# -> температура и состояние
+
+text: "повтори трек"
+# -> repeat one
+
+text: "объяви проверка связи"
+# -> TTS на станции через voice server :8090
+```
 
 ## Notes
 

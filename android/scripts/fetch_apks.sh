@@ -4,14 +4,18 @@
 #   ./android/scripts/fetch_apks.sh
 #
 # Override with:
-#   NABUSTATION_REPO=user/repo NABUSTATION_VERSION=v1.0.0 ./fetch_apks.sh
+#   NABUSTATION_REPO=user/repo NABUSTATION_VERSION=v1.0.1 ./fetch_apks.sh
 set -euo pipefail
 
 ANDROID_DIR=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 DEST="${1:-$ANDROID_DIR/apk}"
 REPO="${NABUSTATION_REPO:-qwikly3/NabuStation}"
-TAG="${NABUSTATION_VERSION:-v1.0.0}"
-BASE="https://github.com/$REPO/releases/download/$TAG"
+TAG="${NABUSTATION_VERSION:-latest}"
+if [ "$TAG" = "latest" ]; then
+  BASE="https://github.com/$REPO/releases/latest/download"
+else
+  BASE="https://github.com/$REPO/releases/download/$TAG"
+fi
 
 ASSETS="nowplaying.apk station-remote-modes.apk tvlauncher.apk snapcast.apk smarttube-32.68.apk lite-tv-launcher-v1.0.apk"
 
