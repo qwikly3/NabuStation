@@ -25,3 +25,23 @@ input_text:
     name: NabuStation last voice action result
     max: 255
     initial: ""
+  nabustation_sleep_status:
+    name: NabuStation sleep timer status
+    max: 255
+    initial: "Таймер сна выключен."
+  nabustation_timers_status:
+    name: NabuStation active timers
+    max: 255
+    initial: "Таймеров нет."
+  nabustation_alarms_status:
+    name: NabuStation alarms
+    max: 255
+    initial: "Будильников нет."
+  nabustation_next_alarm:
+    name: NabuStation next alarm
+    max: 255
+    initial: "Будильников нет."
+  nabustation_night_status:
+    name: NabuStation night mode status
+    max: 255
+    initial: "Ночной режим выключен."

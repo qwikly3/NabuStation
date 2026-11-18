@@ -1,13 +1,14 @@
 # Station Remote (Android phone app)
 
 `android/apk/station-remote-modes.apk` is the phone remote (`ru.station.remote`,
-version 1.4). It talks to the station's `RemoteDaemon` on TCP 8096 and to the
+version 1.9). It talks to the station's `RemoteDaemon` on TCP 8096 and to the
 visualizer API on port 8099. It does not need root on the phone.
 
 ## Features
 
 - Modes: **YOUTUBE**, **MUSIC**, **TV**.
 - Music transport, ±10 s seek, liked songs.
+- **DJ** button: opens Spotify AI DJ (Spotify Connect output to Station 1).
 - PTT / text input, notification volume, media volume.
 - System stats (RAM, temperature, network) and **CLEAN RAM**.
 - Touchpad / directional pad for Android TV.
@@ -28,7 +29,8 @@ or fetch the release asset and install it:
 adb install -r android/apk/station-remote-modes.apk
 ```
 
-Release: **https://github.com/qwikly3/NabuStation/releases/tag/v1.0.0**
+Release: **https://github.com/qwikly3/NabuStation/releases** (APK 1.9 — в
+ближайшем релизе 1.1; в git APK не хранится).
 
 If an older build is installed with a different signature:
 

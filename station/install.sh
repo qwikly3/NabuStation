@@ -90,7 +90,8 @@ ask DEFAULT_LEVEL "Default volume level 0..100" "5"
 echo "==> Installing packages"
 export DEBIAN_FRONTEND=noninteractive
 apt-get update
-apt-get install -y alsa-utils python3 netcat-openbsd runit
+apt-get install -y alsa-utils python3 netcat-openbsd runit \
+  bluez bluez-alsa-utils bluez-tools
 if ! command -v snapclient >/dev/null 2>&1 && [ "$WITH_SNAPCLIENT" -eq 1 ]; then
   apt-get install -y snapclient || {
     echo "WARNING: snapclient package not found; music playback will not work." >&2
@@ -112,7 +113,7 @@ echo "==> Installing station helpers to $VOICE_DIR"
 install -d "$VOICE_DIR"
 install -d "$ENV_DIR"
 TS=$(date +%Y%m%d-%H%M%S)
-for f in mic.sh play.sh led.sh start.sh watch.sh button.py dial.py volume_server.py; do
+for f in mic.sh play.sh play_server.py led.sh start.sh watch.sh button.py dial.py volume_server.py bluetooth_mode.sh wifi-5g.sh sunrise.sh; do
   if [ -f "$VOICE_DIR/$f" ]; then
     cp -a "$VOICE_DIR/$f" "$VOICE_DIR/$f.bak-$TS"
   fi
@@ -150,6 +151,13 @@ BUTTON_DEV=/dev/input/event1
 DIAL_DEV=/dev/input/event0
 VOLUME_PORT=$VOLUME_PORT
 WATCH_VOLUME=1
+# On-demand Bluetooth A2DP sink mode (phone pairs to this name).
+BT_ALIAS=NabuStation
+BT_START_DELAY=5
+# Prefer 5 GHz Wi-Fi on boot.  Fill these only in the live station.env;
+# they are deliberately empty in the repo.
+WIFI_5G_SSID=
+WIFI_5G_PSK=
 EOF
   chmod 600 "$ENV_FILE"
 fi

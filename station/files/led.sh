@@ -28,8 +28,10 @@ while true; do
     wake|listen) echo "$cmd" > "$VOICE_DIR/led_state"; set_all 0 90 255 110 ;;
     think)       echo think  > "$VOICE_DIR/led_state"; set_all 0 40 120 80 ;;
     speak)       echo speak  > "$VOICE_DIR/led_state"; set_all 0 150 255 130 ;;
-    off|idle)    echo off    > "$VOICE_DIR/led_state"; set_all 0 0 0 0 ;;
-    stop)        pkill -x aplay 2>/dev/null ;;
+    off|idle)    echo off    > "$VOICE_DIR/led_state"; pkill -f sunrise.sh 2>/dev/null; set_all 0 0 0 0 ;;
+    stop)        pkill -x aplay 2>/dev/null; pkill -f sunrise.sh 2>/dev/null ;;
+    bt)          echo bt > "$VOICE_DIR/led_state"; set_all 0 40 255 140 ;;
+    sunrise)     pkill -f sunrise.sh 2>/dev/null; setsid /root/voice/sunrise.sh >/dev/null 2>&1 & ;;
     tv)          [ -x /usr/local/sbin/station-android ] && /usr/local/sbin/station-android ;;
   esac
 done

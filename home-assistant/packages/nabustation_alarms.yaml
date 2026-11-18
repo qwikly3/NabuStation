@@ -1,0 +1,106 @@
+# NabuStation: voice alarms on the voice server control API.
+rest_command:
+  nabustation_alarm_set:
+    url: >-
+      http://{{ states('input_text.nabustation_voice_host')
+                 if states('input_text.nabustation_voice_host')
+                    not in ['unknown', 'unavailable', ''] else '127.0.0.1' }}:8090/alarm?action=set&text={{ when | urlencode }}
+    method: GET
+    timeout: 10
+  nabustation_alarm_list:
+    url: >-
+      http://{{ states('input_text.nabustation_voice_host')
+                 if states('input_text.nabustation_voice_host')
+                    not in ['unknown', 'unavailable', ''] else '127.0.0.1' }}:8090/alarm?action=list
+    method: GET
+    timeout: 10
+  nabustation_alarm_cancel:
+    url: >-
+      http://{{ states('input_text.nabustation_voice_host')
+                 if states('input_text.nabustation_voice_host')
+                    not in ['unknown', 'unavailable', ''] else '127.0.0.1' }}:8090/alarm?action=cancel&text={{ when | default('') | urlencode }}
+    method: GET
+    timeout: 10
+  nabustation_alarm_cancel_all:
+    url: >-
+      http://{{ states('input_text.nabustation_voice_host')
+                 if states('input_text.nabustation_voice_host')
+                    not in ['unknown', 'unavailable', ''] else '127.0.0.1' }}:8090/alarm?action=cancel_all
+    method: GET
+    timeout: 10
+  nabustation_alarm_stop:
+    url: >-
+      http://{{ states('input_text.nabustation_voice_host')
+                 if states('input_text.nabustation_voice_host')
+                    not in ['unknown', 'unavailable', ''] else '127.0.0.1' }}:8090/alarm?action=stop
+    method: GET
+    timeout: 10
+  nabustation_alarm_set_media:
+    url: >-
+      http://{{ states('input_text.nabustation_voice_host')
+                 if states('input_text.nabustation_voice_host')
+                    not in ['unknown', 'unavailable', ''] else '127.0.0.1' }}:8090/alarm?action=set_media&text={{ query | urlencode }}
+    method: GET
+    timeout: 25
+  nabustation_alarm_clear_media:
+    url: >-
+      http://{{ states('input_text.nabustation_voice_host')
+                 if states('input_text.nabustation_voice_host')
+                    not in ['unknown', 'unavailable', ''] else '127.0.0.1' }}:8090/alarm?action=clear_media
+    method: GET
+    timeout: 10
+
+intent_script:
+  NabuAlarmSet:
+    speech:
+      text: >-
+        {% set value = states('input_text.nabustation_alarms_status') %}
+        {% if value in ['unknown', 'unavailable', ''] %}Будильник поставлен.{% else %}{{ value }}{% endif %}
+    action:
+      - action: rest_command.nabustation_alarm_set
+        data:
+          when: "{{ when }}"
+
+  NabuAlarmList:
+    speech:
+      text: >-
+        {% set value = states('input_text.nabustation_alarms_status') %}
+        {% if value in ['unknown', 'unavailable', ''] %}Будильников нет.{% else %}{{ value }}{% endif %}
+    action:
+      - action: rest_command.nabustation_alarm_list
+
+  NabuAlarmCancel:
+    speech:
+      text: "Отменил будильник."
+    action:
+      - action: rest_command.nabustation_alarm_cancel
+        data:
+          when: "{{ when | default('') }}"
+
+  NabuAlarmCancelAll:
+    speech:
+      text: "Отменил все будильники."
+    action:
+      - action: rest_command.nabustation_alarm_cancel_all
+
+  NabuAlarmStop:
+    speech:
+      text: "Будильник выключен."
+    action:
+      - action: rest_command.nabustation_alarm_stop
+
+  NabuAlarmMediaSet:
+    speech:
+      text: >-
+        {% set value = states('input_text.nabustation_alarms_status') %}
+        {% if value in ['unknown', 'unavailable', ''] %}Поставил песню на будильник.{% else %}{{ value }}{% endif %}
+    action:
+      - action: rest_command.nabustation_alarm_set_media
+        data:
+          query: "{{ query }}"
+
+  NabuAlarmMediaClear:
+    speech:
+      text: "Вернул стандартный звук будильника."
+    action:
+      - action: rest_command.nabustation_alarm_clear_media

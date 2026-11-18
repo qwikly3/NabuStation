@@ -1,0 +1,16 @@
+# NabuStation: play a named track, album, artist, playlist, podcast or audiobook.
+# The actual search/playback runs through Music Assistant in music_play.py.
+intent_script:
+  NabuMusicSearchPlay:
+    speech:
+      text: "Включаю."
+    action:
+      - action: shell_command.nabustation_music_play_query
+        data:
+          kind: "{{ kind | default('track') }}"
+          query: "{{ query }}"
+
+shell_command:
+  nabustation_music_play_query: >-
+    python3 /config/scripts/music_play.py {{ kind }}
+    "{{ query | replace('"', '') | replace(';', '') | replace('&', '') | replace('|', '') | replace('$', '') | replace('`', '') }}"

@@ -1,0 +1,39 @@
+language: "ru"
+intents:
+  NabuSleepTimerStart:
+    data:
+      - sentences:
+          - "таймер сна на {duration}"
+          - "поставь таймер сна на {duration}"
+          - "включи таймер сна на {duration}"
+          - "выключи музыку через {duration}"
+          - "засыпаю через {duration}"
+        lists:
+          duration:
+            wildcard: true
+
+  NabuSleepTimerExtend:
+    data:
+      - sentences:
+          - "продли таймер сна на {duration}"
+          - "продли сон на {duration}"
+          - "добавь к таймеру сна {duration}"
+        lists:
+          duration:
+            wildcard: true
+
+  NabuSleepTimerCancel:
+    data:
+      - sentences:
+          - "отмени таймер сна"
+          - "убери таймер сна"
+          - "отмени сон"
+          - "не выключай музыку"
+
+  NabuSleepTimerStatus:
+    data:
+      - sentences:
+          - "сколько осталось до выключения"
+          - "сколько осталось таймера сна"
+          - "когда выключится музыка"
+          - "сколько до конца таймера сна"

@@ -1,0 +1,50 @@
+# NabuStation: voice control for Music Assistant's native sleep timer.
+shell_command:
+  nabustation_sleep_start: >-
+    python3 /config/scripts/music_sleep.py start {{ duration | replace(";", "") | replace("&", "") | replace("|", "") | replace("`", "") | replace("$", "") }}
+  nabustation_sleep_extend: >-
+    python3 /config/scripts/music_sleep.py extend {{ duration | replace(";", "") | replace("&", "") | replace("|", "") | replace("`", "") | replace("$", "") }}
+  nabustation_sleep_cancel: "python3 /config/scripts/music_sleep.py cancel"
+  nabustation_sleep_status: "python3 /config/scripts/music_sleep.py status"
+
+command_line:
+  - sensor:
+      name: NabuStation sleep timer
+      command: "python3 /config/scripts/music_sleep.py status"
+      scan_interval: 15
+      value_template: "{{ value }}"
+
+intent_script:
+  NabuSleepTimerStart:
+    speech:
+      text: "Таймер сна на {{ duration }}."
+    action:
+      - action: shell_command.nabustation_sleep_start
+        data:
+          duration: "{{ duration }}"
+
+  NabuSleepTimerExtend:
+    speech:
+      text: "Продлил таймер сна на {{ duration }}."
+    action:
+      - action: shell_command.nabustation_sleep_extend
+        data:
+          duration: "{{ duration }}"
+
+  NabuSleepTimerCancel:
+    speech:
+      text: "Отменил таймер сна."
+    action:
+      - action: shell_command.nabustation_sleep_cancel
+
+  NabuSleepTimerStatus:
+    speech:
+      text: >-
+        {% set left = states('input_text.nabustation_sleep_status') %}
+        {% if left in ['unknown', 'unavailable', ''] %}
+        Таймер сна выключен.
+        {% else %}
+        {{ left }}
+        {% endif %}
+    action:
+      - action: shell_command.nabustation_sleep_status

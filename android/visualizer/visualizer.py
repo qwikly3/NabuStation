@@ -232,12 +232,18 @@ async def health(request: web.Request) -> web.Response:
     return web.json_response({"ok": True, "state": data.get("state")})
 
 
-async def announce_text(text: str) -> web.Response:
+async def voice_request(path: str, payload: dict | None = None) -> web.Response:
+    """Forward a phone/HA request to the voice server control API.
+
+    Port 8090 is often firewalled on the HA host, while the visualizer port
+    8099 is already open for the TV and phone.  Keeping this proxy on 8099
+    means the phone only needs one media-host IP.
+    """
     async with aiohttp.ClientSession() as session:
         try:
             async with session.post(
-                f"{VOICE_CONTROL_URL}/say",
-                json={"text": text},
+                f"{VOICE_CONTROL_URL}{path}",
+                json=payload,
                 timeout=6,
             ) as resp:
                 body = await resp.text()
@@ -252,6 +258,51 @@ async def announce_text(text: str) -> web.Response:
             return web.json_response(
                 {"ok": False, "error": f"voice server: {exc}"}, status=502
             )
+
+
+async def voice_health(request: web.Request) -> web.Response:
+    async with aiohttp.ClientSession() as session:
+        try:
+            async with session.get(
+                f"{VOICE_CONTROL_URL}/health", timeout=5
+            ) as resp:
+                body = await resp.text()
+                return web.json_response(
+                    {
+                        "ok": 200 <= resp.status < 300,
+                        "status": resp.status,
+                        "body": body[:300],
+                    }
+                )
+        except Exception as exc:  # noqa: BLE001
+            return web.json_response(
+                {"ok": False, "error": f"voice server: {exc}"}, status=502
+            )
+
+
+async def announce_text(text: str) -> web.Response:
+    return await voice_request("/say", {"text": text})
+
+
+async def voice_ptt(request: web.Request) -> web.Response:
+    return await voice_request("/ptt", {})
+
+
+async def voice_say(request: web.Request) -> web.Response:
+    text = request.query.get("text", "")
+    if not text:
+        body = await request.text()
+        if "json" in (request.content_type or "").lower():
+            try:
+                text = str((json.loads(body) or {}).get("text", ""))
+            except (TypeError, ValueError):
+                text = ""
+        else:
+            text = body
+    text = text.strip()
+    if not text:
+        raise web.HTTPBadRequest(text="empty text")
+    return await voice_request("/say", {"text": text})
 
 
 async def play_similar() -> web.Response:
@@ -447,6 +498,9 @@ async def main() -> None:
     app.router.add_get("/api/cover", api_cover)
     app.router.add_get("/api/lyrics", api_lyrics)
     app.router.add_get("/api/music", music_action)
+    app.router.add_get("/api/voice/health", voice_health)
+    app.router.add_post("/api/voice/ptt", voice_ptt)
+    app.router.add_post("/api/voice/say", voice_say)
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", PORT)

@@ -1,0 +1,87 @@
+# NabuStation: voice timers on the voice server control API.
+rest_command:
+  nabustation_timer_start:
+    url: >-
+      http://{{ states('input_text.nabustation_voice_host')
+                 if states('input_text.nabustation_voice_host')
+                    not in ['unknown', 'unavailable', ''] else '127.0.0.1' }}:8090/timer?action=start&name={{ name | default('') | urlencode }}&duration={{ duration | urlencode }}
+    method: GET
+    timeout: 10
+  nabustation_timer_list:
+    url: >-
+      http://{{ states('input_text.nabustation_voice_host')
+                 if states('input_text.nabustation_voice_host')
+                    not in ['unknown', 'unavailable', ''] else '127.0.0.1' }}:8090/timer?action=list
+    method: GET
+    timeout: 10
+  nabustation_timer_cancel:
+    url: >-
+      http://{{ states('input_text.nabustation_voice_host')
+                 if states('input_text.nabustation_voice_host')
+                    not in ['unknown', 'unavailable', ''] else '127.0.0.1' }}:8090/timer?action=cancel&name={{ name | default('') | urlencode }}
+    method: GET
+    timeout: 10
+  nabustation_timer_cancel_all:
+    url: >-
+      http://{{ states('input_text.nabustation_voice_host')
+                 if states('input_text.nabustation_voice_host')
+                    not in ['unknown', 'unavailable', ''] else '127.0.0.1' }}:8090/timer?action=cancel_all
+    method: GET
+    timeout: 10
+  nabustation_timer_extend:
+    url: >-
+      http://{{ states('input_text.nabustation_voice_host')
+                 if states('input_text.nabustation_voice_host')
+                    not in ['unknown', 'unavailable', ''] else '127.0.0.1' }}:8090/timer?action=extend&name={{ name | default('') | urlencode }}&duration={{ duration | urlencode }}
+    method: GET
+    timeout: 10
+
+intent_script:
+  NabuTimerStart:
+    speech:
+      text: "Таймер на {{ duration }}."
+    action:
+      - action: rest_command.nabustation_timer_start
+        data:
+          name: ""
+          duration: "{{ duration }}"
+
+  NabuTimerStartNamed:
+    speech:
+      text: "Таймер {{ name }} на {{ duration }}."
+    action:
+      - action: rest_command.nabustation_timer_start
+        data:
+          name: "{{ name }}"
+          duration: "{{ duration }}"
+
+  NabuTimerList:
+    speech:
+      text: >-
+        {% set value = states('input_text.nabustation_timers_status') %}
+        {% if value in ['unknown', 'unavailable', ''] %}Таймеров нет.{% else %}{{ value }}{% endif %}
+    action:
+      - action: rest_command.nabustation_timer_list
+
+  NabuTimerCancel:
+    speech:
+      text: "Отменил таймер."
+    action:
+      - action: rest_command.nabustation_timer_cancel
+        data:
+          name: "{{ name | default('') }}"
+
+  NabuTimerCancelAll:
+    speech:
+      text: "Отменил все таймеры."
+    action:
+      - action: rest_command.nabustation_timer_cancel_all
+
+  NabuTimerExtend:
+    speech:
+      text: "Продлил таймер на {{ duration }}."
+    action:
+      - action: rest_command.nabustation_timer_extend
+        data:
+          name: "{{ name | default('') }}"
+          duration: "{{ duration }}"

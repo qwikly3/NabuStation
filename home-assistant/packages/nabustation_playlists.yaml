@@ -1,0 +1,25 @@
+# NabuStation: create Spotify playlists and add the current track to one.
+intent_script:
+  NabuPlaylistAddCurrent:
+    speech:
+      text: "Добавил в плейлист."
+    action:
+      - action: shell_command.nabustation_playlist_add_current
+        data:
+          name: "{{ name }}"
+
+  NabuPlaylistCreate:
+    speech:
+      text: "Создал плейлист."
+    action:
+      - action: shell_command.nabustation_playlist_create
+        data:
+          name: "{{ name }}"
+
+shell_command:
+  nabustation_playlist_add_current: >-
+    python3 /config/scripts/music_playlist.py add_current
+    "{{ name | replace('"', '') | replace(';', '') | replace('&', '') | replace('|', '') | replace('$', '') | replace('`', '') }}"
+  nabustation_playlist_create: >-
+    python3 /config/scripts/music_playlist.py create
+    "{{ name | replace('"', '') | replace(';', '') | replace('&', '') | replace('|', '') | replace('$', '') | replace('`', '') }}"

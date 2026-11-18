@@ -21,6 +21,12 @@ intent_script:
     action:
       - action: shell_command.nabustation_music_unlike
 
+  NabuSpotifyDj:
+    speech:
+      text: >-
+        AI DJ запускается из приложения Spotify. Нажми кнопку DJ в пульте —
+        Station 1 уже выбран как устройство.
+
 script:
   nabustation_music_play_my:
     alias: "NabuStation: play Liked Songs (non-blocking)"

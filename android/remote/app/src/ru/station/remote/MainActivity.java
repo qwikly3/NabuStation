@@ -1,10 +1,14 @@
 package ru.station.remote;
 
 import android.app.Activity;
+import android.app.AlertDialog;
+import android.content.DialogInterface;
+import android.content.Intent;
 import android.content.SharedPreferences;
 import android.graphics.Color;
 import android.graphics.drawable.GradientDrawable;
 import android.graphics.drawable.StateListDrawable;
+import android.net.Uri;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
@@ -55,8 +59,13 @@ public class MainActivity extends Activity {
     private RemoteClient client;
     private RemoteClient mouseClient;
     private TextView status;
+    private TextView linkStatus;
     private TextView volStatus;
     private TextView sysStatus;
+    private volatile String stationMode = "unknown";
+    private volatile boolean mediaOnline = false;
+    private volatile boolean voiceOnline = false;
+    private int modeFailures = 0;
     private TextView musicNow;
     private LinearLayout musicSection;
     private LinearLayout youtubeSection;
@@ -64,6 +73,9 @@ public class MainActivity extends Activity {
     private Button modeYoutube;
     private Button modeMusic;
     private Button modeTv;
+    private Button modeButton;
+    private Button btButton;
+    private volatile boolean btActive = false;
     private String mode = "music";
     private EditText hostField;
     private EditText mediaField;
@@ -74,6 +86,7 @@ public class MainActivity extends Activity {
     private Thread volPoll;
     private Thread mediaPoll;
     private volatile boolean running = true;
+    private long lastModeToast = 0;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -83,21 +96,149 @@ public class MainActivity extends Activity {
         SharedPreferences prefs = getSharedPreferences("remote", MODE_PRIVATE);
         String host = prefs.getString("host", DEFAULT_HOST);
         hostField.setText(host);
-        client = new RemoteClient(host, new RemoteClient.Listener() {
-            public void onStatus(final boolean connected) {
-                ui.post(new Runnable() {
-                    public void run() {
-                        status.setText(connected ? "\u25CF ONLINE" : "\u25CF OFFLINE");
-                        status.setTextColor(connected ? 0xFF39D98A : 0xFFFF5A5A);
-                    }
-                });
-            }
-        }, 8096);
+        // The header status is driven by startStatusPoll(): the station can be
+        // in Debian mode (8098) or Android mode (8096).  Do not tie "ONLINE"
+        // to RemoteDaemon alone, otherwise a Debian station looks offline.
+        client = new RemoteClient(host, null, 8096);
         client.start();
         mouseClient = new RemoteClient(host, null, 8097);
         mouseClient.start();
+        startStatusPoll();
         startVolumePoll();
         startMediaPoll();
+    }
+
+    private boolean canConnect(String host, int port, int timeoutMs) {
+        Socket s = null;
+        try {
+            s = new Socket();
+            s.connect(new InetSocketAddress(host, port), timeoutMs);
+            return true;
+        } catch (Exception e) {
+            return false;
+        } finally {
+            if (s != null) try { s.close(); } catch (Exception ignored) { }
+        }
+    }
+
+    private String httpGetQuick(String url) {
+        HttpURLConnection c = null;
+        try {
+            c = (HttpURLConnection) new URL(url).openConnection();
+            c.setConnectTimeout(2500);
+            c.setReadTimeout(3000);
+            if (c.getResponseCode() != 200) return null;
+            InputStream in = c.getInputStream();
+            BufferedReader r = new BufferedReader(new InputStreamReader(in, "UTF-8"));
+            StringBuilder sb = new StringBuilder();
+            String line;
+            while ((line = r.readLine()) != null) sb.append(line);
+            r.close();
+            in.close();
+            return sb.toString();
+        } catch (Exception e) {
+            return null;
+        } finally {
+            if (c != null) c.disconnect();
+        }
+    }
+
+    private void startStatusPoll() {
+        Thread t = new Thread(new Runnable() {
+            @Override
+            public void run() {
+                while (running) {
+                    String host = hostField.getText().toString().trim();
+                    if (host.length() == 0) host = DEFAULT_HOST;
+                    boolean android = canConnect(host, 8096, 1500);
+                    boolean debian = false;
+                    String health = httpGetQuick("http://" + host + ":8098/health");
+                    if (health != null) {
+                        try {
+                            debian = new JSONObject(health).optBoolean("ok", false);
+                        } catch (Exception ignored) {
+                        }
+                    }
+                    final String mode;
+                    String previous = stationMode;
+                    if (android) {
+                        mode = "android";
+                        modeFailures = 0;
+                    } else if (debian) {
+                        mode = "debian";
+                        modeFailures = 0;
+                    } else if (!"unknown".equals(previous) && modeFailures < 2) {
+                        // One slow health check must not flip the UI to
+                        // OFFLINE and break Debian volume buttons.
+                        mode = previous;
+                        modeFailures++;
+                    } else {
+                        mode = "unknown";
+                        modeFailures = 0;
+                    }
+                    stationMode = mode;
+
+                    String mh = httpGetQuick(mediaBase() + "/health");
+                    boolean mediaOk = false;
+                    if (mh != null) {
+                        try {
+                            mediaOk = new JSONObject(mh).optBoolean("ok", false);
+                        } catch (Exception ignored) {
+                        }
+                    }
+                    String vh = httpGetQuick(mediaBase() + "/api/voice/health");
+                    boolean voiceOk = false;
+                    if (vh != null) {
+                        try {
+                            voiceOk = new JSONObject(vh).optBoolean("ok", false);
+                        } catch (Exception ignored) {
+                        }
+                    }
+                    mediaOnline = mediaOk;
+                    voiceOnline = voiceOk;
+
+                    final String statusText;
+                    final int statusColor;
+                    if ("android".equals(mode)) {
+                        statusText = "\u25CF ANDROID";
+                        statusColor = 0xFF39D98A;
+                    } else if ("debian".equals(mode)) {
+                        statusText = "\u25CF DEBIAN";
+                        statusColor = 0xFF39D98A;
+                    } else if (mediaOk || voiceOk) {
+                        statusText = "\u25CF MEDIA";
+                        statusColor = 0xFFFFB020;
+                    } else {
+                        statusText = "\u25CF OFFLINE";
+                        statusColor = 0xFFFF5A5A;
+                    }
+                    final String link = (mediaOk ? "MEDIA OK" : "MEDIA OFF")
+                            + " · " + (voiceOk ? "VOICE OK" : "VOICE OFF");
+                    ui.post(new Runnable() {
+                        public void run() {
+                            status.setText(statusText);
+                            status.setTextColor(statusColor);
+                            if (linkStatus != null) linkStatus.setText(link);
+                            if (modeButton != null) {
+                                if ("debian".equals(mode)) {
+                                    modeButton.setText("→ ANDROID");
+                                } else if ("android".equals(mode)) {
+                                    modeButton.setText("→ DEBIAN");
+                                } else {
+                                    modeButton.setText("РЕЖИМ СТАНЦИИ");
+                                }
+                            }
+                        }
+                    });
+                    try {
+                        Thread.sleep(4000);
+                    } catch (InterruptedException e) {
+                        return;
+                    }
+                }
+            }
+        }, "status-poll");
+        t.start();
     }
 
     private void startVolumePoll() {
@@ -107,25 +248,79 @@ public class MainActivity extends Activity {
                 int tick = 0;
                 while (running) {
                     String host = hostField.getText().toString().trim();
-                    final String media = query(host, "volget");
-                    final String notif = query(host, "notifget");
-                    final String mem = (tick % 5 == 0) ? query(host, "mem") : null;
-                    final String temp = (tick % 5 == 0) ? query(host, "temp") : null;
-                    final String net = (tick % 5 == 0) ? query(host, "net") : null;
+                    final String mode = stationMode;
+                    final String media;
+                    final String notif;
+                    final String mem;
+                    final String temp;
+                    final String net;
+                    final boolean bt;
+                    if ("debian".equals(mode)) {
+                        String level = "—";
+                        boolean btState = false;
+                        String h = httpGetQuick("http://" + host + ":8098/health");
+                        if (h != null) {
+                            try {
+                                JSONObject o = new JSONObject(h);
+                                int value = o.optInt("level", -1);
+                                if (value >= 0) level = String.valueOf(value);
+                                btState = o.optBoolean("bt", false);
+                            } catch (Exception ignored) {
+                            }
+                        }
+                        media = level;
+                        notif = "—";
+                        mem = null;
+                        temp = null;
+                        net = null;
+                        bt = btState;
+                    } else if ("android".equals(mode)) {
+                        media = query(host, "volget");
+                        notif = query(host, "notifget");
+                        mem = (tick % 5 == 0) ? query(host, "mem") : null;
+                        temp = (tick % 5 == 0) ? query(host, "temp") : null;
+                        net = (tick % 5 == 0) ? query(host, "net") : null;
+                        bt = false;
+                    } else {
+                        media = "—";
+                        notif = "—";
+                        mem = null;
+                        temp = null;
+                        net = null;
+                        bt = false;
+                    }
                     ui.post(new Runnable() {
                         @Override
                         public void run() {
-                            volStatus.setText("Медиа " + media + "%   Уведомления " + notif + "%");
-                            if (mem != null) {
-                                String[] m = mem.split(" ");
-                                String ram = m.length >= 2 ? m[0] + "/" + m[1] + " МБ" : "—";
-                                sysStatus.setText("CPU " + temp + "°C · RAM " + ram + " · Wi-Fi " + net);
+                            if ("debian".equals(mode)) {
+                                volStatus.setText("Медиа " + media + "% · Debian");
+                                sysStatus.setText(bt
+                                        ? "Bluetooth включён · подключи телефон к NabuStation"
+                                        : "Громкость станции 8098 · TV-команды в Android-режиме");
+                                btActive = bt;
+                                if (btButton != null) {
+                                    btButton.setText(bt ? "BT ON" : "BT OFF");
+                                }
+                            } else if ("android".equals(mode)) {
+                                btActive = false;
+                                if (btButton != null) btButton.setText("BT");
+                                volStatus.setText("Медиа " + media + "%   Уведомления " + notif + "%");
+                                if (mem != null) {
+                                    String[] m = mem.split(" ");
+                                    String ram = m.length >= 2 ? m[0] + "/" + m[1] + " МБ" : "—";
+                                    sysStatus.setText("CPU " + temp + "°C · RAM " + ram + " · Wi-Fi " + net);
+                                }
+                            } else {
+                                volStatus.setText("Медиа —");
+                                sysStatus.setText("Станция не найдена");
+                                btActive = false;
+                                if (btButton != null) btButton.setText("BT");
                             }
                         }
                     });
                     tick++;
                     try {
-                        Thread.sleep(1000);
+                        Thread.sleep("debian".equals(mode) ? 2000 : 1000);
                     } catch (InterruptedException e) {
                         return;
                     }
@@ -161,20 +356,38 @@ public class MainActivity extends Activity {
     }
 
     private String mediaBase() {
-        String h = getSharedPreferences("remote", MODE_PRIVATE)
-                .getString("media_host", DEFAULT_MEDIA_HOST);
-        return "http://" + h + ":8099";
+        return "http://" + mediaHost() + ":8099";
     }
 
     private String controlBase() {
-        String h = getSharedPreferences("remote", MODE_PRIVATE)
-                .getString("media_host", DEFAULT_MEDIA_HOST);
-        return "http://" + h + ":8090";
+        // Use the visualizer proxy on :8099.  Port 8090 is often firewalled
+        // on the HA host, while the TV/phone already use 8099.
+        return mediaBase() + "/api/voice";
     }
 
     private String mediaHost() {
+        if (mediaField != null) {
+            String m = mediaField.getText().toString().trim();
+            if (m.length() > 0) return m;
+        }
         return getSharedPreferences("remote", MODE_PRIVATE)
                 .getString("media_host", DEFAULT_MEDIA_HOST);
+    }
+
+    private void saveSettings() {
+        if (hostField == null || mediaField == null) return;
+        String h = hostField.getText().toString().trim();
+        if (h.length() == 0) h = DEFAULT_HOST;
+        String m = mediaField.getText().toString().trim();
+        if (m.length() == 0) m = DEFAULT_MEDIA_HOST;
+        // commit() instead of apply(): the activity may be killed right after
+        // onPause, and the phone must keep the last station/media IP.
+        getSharedPreferences("remote", MODE_PRIVATE).edit()
+                .putString("host", h)
+                .putString("media_host", m)
+                .commit();
+        if (client != null) client.setHost(h);
+        if (mouseClient != null) mouseClient.setHost(h);
     }
 
     private void startMediaPoll() {
@@ -280,6 +493,12 @@ public class MainActivity extends Activity {
     }
 
     @Override
+    protected void onPause() {
+        saveSettings();
+        super.onPause();
+    }
+
+    @Override
     protected void onDestroy() {
         running = false;
         if (volPoll != null) volPoll.interrupt();
@@ -305,6 +524,25 @@ public class MainActivity extends Activity {
         s.addState(new int[]{android.R.attr.state_pressed}, bg(pressed, 12));
         s.addState(new int[]{}, bg(normal, 12));
         return s;
+    }
+
+    private void openSpotifyDj() {
+        String deepLink = "spotify:playlist:37i9dQZF1EYkqdzj48dyYq";
+        try {
+            Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse(deepLink));
+            intent.setPackage("com.spotify.music");
+            startActivity(intent);
+            return;
+        } catch (Exception ignored) {
+            // Spotify may not be installed or may reject the URI.
+        }
+        try {
+            startActivity(new Intent(
+                    Intent.ACTION_VIEW,
+                    Uri.parse("https://open.spotify.com/playlist/37i9dQZF1EYkqdzj48dyYq")));
+        } catch (Exception ignored) {
+            Toast.makeText(this, "Spotify не установлен", Toast.LENGTH_SHORT).show();
+        }
     }
 
     private Button makeButton(String label, int color, int textColor, int heightDp, int textSp) {
@@ -414,11 +652,21 @@ public class MainActivity extends Activity {
         gear.setLayoutParams(glp);
         gear.setOnClickListener(new View.OnClickListener() {
             public void onClick(View v) {
+                if (settingsRow.getVisibility() == View.VISIBLE) {
+                    saveSettings();
+                }
                 settingsRow.setVisibility(settingsRow.getVisibility() == View.VISIBLE ? View.GONE : View.VISIBLE);
             }
         });
         header.addView(gear);
         root.addView(header);
+
+        linkStatus = new TextView(this);
+        linkStatus.setText("MEDIA — · VOICE —");
+        linkStatus.setTextColor(MUTED);
+        linkStatus.setTextSize(11);
+        linkStatus.setPadding(dp(8), dp(1), dp(8), dp(4));
+        root.addView(linkStatus);
 
         LinearLayout ptt = row();
         Button talk = makeButton("PUSH TO TALK", ACCENT, 0xFF141418, 50, 14);
@@ -463,6 +711,25 @@ public class MainActivity extends Activity {
         musicClick(globalNext, "next");
         transport.addView(globalNext);
         root.addView(transport);
+
+        LinearLayout modeRow = row();
+        modeButton = makeButton("РЕЖИМ СТАНЦИИ", 0xFF2A2A35, TEXT, 42, 11);
+        modeButton.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) {
+                v.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY);
+                confirmModeSwitch();
+            }
+        });
+        modeRow.addView(modeButton);
+        btButton = makeButton("BT", 0xFF2A2A35, TEXT, 42, 10);
+        btButton.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) {
+                v.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY);
+                confirmBluetooth();
+            }
+        });
+        modeRow.addView(btButton);
+        root.addView(modeRow);
 
         LinearLayout modes = row();
         modeYoutube = makeButton("YOUTUBE", BTN, TEXT, 42, 11);
@@ -602,6 +869,13 @@ public class MainActivity extends Activity {
         Button musicFwd10 = makeButton("+10s", BTN, TEXT, 44, 13);
         musicClick(musicFwd10, "seekfwd");
         musicSeek.addView(musicFwd10);
+        Button musicDj = makeButton("DJ", ACCENT, 0xFF141418, 44, 11);
+        musicDj.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) {
+                openSpotifyDj();
+            }
+        });
+        musicSeek.addView(musicDj);
         musicSection.addView(musicSeek);
         root.addView(musicSection);
 
@@ -746,19 +1020,11 @@ public class MainActivity extends Activity {
         Button save = makeButton("SAVE", 0xFF2A2A35, TEXT, 48, 13);
         save.setOnClickListener(new View.OnClickListener() {
             public void onClick(View v) {
-                String h = hostField.getText().toString().trim();
-                if (h.length() == 0) h = DEFAULT_HOST;
-                String m = mediaField.getText().toString().trim();
-                if (m.length() == 0) m = DEFAULT_MEDIA_HOST;
-                getSharedPreferences("remote", MODE_PRIVATE).edit()
-                        .putString("host", h)
-                        .putString("media_host", m)
-                        .apply();
-                if (client != null) client.setHost(h);
-                if (mouseClient != null) mouseClient.setHost(h);
+                saveSettings();
                 settingsRow.setVisibility(View.GONE);
                 Toast.makeText(MainActivity.this,
-                        "Station: " + h + "  Media: " + m,
+                        "Сохранено: станция " + hostField.getText().toString().trim()
+                                + ", media " + mediaField.getText().toString().trim(),
                         Toast.LENGTH_SHORT).show();
             }
         });
@@ -837,21 +1103,200 @@ public class MainActivity extends Activity {
         return keyboard;
     }
 
+    private void toast(final String text) {
+        ui.post(new Runnable() {
+            public void run() {
+                Toast.makeText(MainActivity.this, text, Toast.LENGTH_SHORT).show();
+            }
+        });
+    }
+
+    private void toastOnce(String text) {
+        long now = System.currentTimeMillis();
+        if (now - lastModeToast < 2000) return;
+        lastModeToast = now;
+        toast(text);
+    }
+
+    private void confirmBluetooth() {
+        if (!"debian".equals(stationMode)) {
+            toastOnce("Bluetooth-режим только в Debian");
+            return;
+        }
+        if (btActive) {
+            new AlertDialog.Builder(this)
+                    .setTitle("Выключить Bluetooth?")
+                    .setMessage("Вернуть музыку и обычный режим станции.")
+                    .setPositiveButton("Выключить", new DialogInterface.OnClickListener() {
+                        public void onClick(DialogInterface dialog, int which) {
+                            btAction("stop");
+                        }
+                    })
+                    .setNegativeButton("Отмена", null)
+                    .show();
+        } else {
+            new AlertDialog.Builder(this)
+                    .setTitle("Включить Bluetooth?")
+                    .setMessage("Станция станет колонкой NabuStation, музыка остановится. "
+                            + "Голосовой ассистент останется доступен.")
+                    .setPositiveButton("Включить", new DialogInterface.OnClickListener() {
+                        public void onClick(DialogInterface dialog, int which) {
+                            btAction("start");
+                        }
+                    })
+                    .setNegativeButton("Отмена", null)
+                    .show();
+        }
+    }
+
+    private void btAction(final String action) {
+        final String host = hostField.getText().toString().trim();
+        toast("start".equals(action)
+                ? "Bluetooth включится через 5 секунд…"
+                : "Выключаю Bluetooth…");
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                if (httpGetQuick("http://" + host + ":8098/bt?action=" + action) == null) {
+                    toast("Не удалось переключить Bluetooth");
+                }
+            }
+        }, "bt-action").start();
+    }
+
+    private void confirmModeSwitch() {
+        if ("debian".equals(stationMode)) {
+            askModeSwitch("Android", "tv");
+        } else if ("android".equals(stationMode)) {
+            askModeSwitch("Debian", "debian");
+        } else {
+            new AlertDialog.Builder(this)
+                    .setTitle("Режим станции неизвестен")
+                    .setMessage("Куда переключить станцию? Она перезагрузится.")
+                    .setPositiveButton("В Android", new DialogInterface.OnClickListener() {
+                        public void onClick(DialogInterface dialog, int which) {
+                            sendModeCommand("tv");
+                        }
+                    })
+                    .setNeutralButton("В Debian", new DialogInterface.OnClickListener() {
+                        public void onClick(DialogInterface dialog, int which) {
+                            sendModeCommand("debian");
+                        }
+                    })
+                    .setNegativeButton("Отмена", null)
+                    .show();
+        }
+    }
+
+    private void askModeSwitch(String target, final String command) {
+        new AlertDialog.Builder(this)
+                .setTitle("Переключить в " + target + "?")
+                .setMessage("Станция перезагрузится. Музыка, голос и TV прервутся.")
+                .setPositiveButton("Переключить", new DialogInterface.OnClickListener() {
+                    public void onClick(DialogInterface dialog, int which) {
+                        sendModeCommand(command);
+                    }
+                })
+                .setNegativeButton("Отмена", null)
+                .show();
+    }
+
+    private void sendModeCommand(final String command) {
+        final String host = hostField.getText().toString().trim();
+        toast("Переключаю станцию…");
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                if (!sendTcp(host, 8093, command)) {
+                    toast("Не удалось отправить команду режима");
+                }
+            }
+        }, "mode-switch").start();
+    }
+
+    private boolean sendTcp(String host, int port, String line) {
+        Socket s = null;
+        try {
+            s = new Socket();
+            s.connect(new InetSocketAddress(host, port), 2500);
+            s.getOutputStream().write((line + "\n").getBytes("UTF-8"));
+            s.getOutputStream().flush();
+            return true;
+        } catch (Exception e) {
+            return false;
+        } finally {
+            if (s != null) try { s.close(); } catch (Exception ignored) { }
+        }
+    }
+
+    private void volumeHttp(final String query) {
+        final String host = hostField.getText().toString().trim();
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                httpGetQuick("http://" + host + ":8098/" + query);
+            }
+        }, "volume-http").start();
+    }
+
     private void send(String cmd) {
+        // While the station mode is still being detected, try both paths:
+        // 8098 is Debian, RemoteDaemon is Android.  The wrong one just fails.
+        if ("volup".equals(cmd)) {
+            if (!"android".equals(stationMode)) volumeHttp("volume?delta=10");
+            if (!"debian".equals(stationMode) && client != null) client.send(cmd);
+            return;
+        }
+        if ("voldown".equals(cmd)) {
+            if (!"android".equals(stationMode)) volumeHttp("volume?delta=-10");
+            if (!"debian".equals(stationMode) && client != null) client.send(cmd);
+            return;
+        }
+        if ("mute".equals(cmd)) {
+            if (!"android".equals(stationMode)) volumeHttp("mute");
+            if (!"debian".equals(stationMode) && client != null) client.send(cmd);
+            return;
+        }
+        if ("debian".equals(stationMode)) {
+            if (cmd.startsWith("notif")) {
+                toastOnce("Уведомления только в Android-режиме");
+                return;
+            }
+            if (cmd.startsWith("key:") || cmd.startsWith("app:")
+                    || cmd.startsWith("text:") || "back".equals(cmd)
+                    || "home".equals(cmd) || "recents".equals(cmd)
+                    || "play".equals(cmd) || "ok".equals(cmd)
+                    || "up".equals(cmd) || "down".equals(cmd)
+                    || "left".equals(cmd) || "right".equals(cmd)
+                    || "clean".equals(cmd)) {
+                toastOnce("TV-команды только в Android-режиме");
+                return;
+            }
+        }
         if (client != null) client.send(cmd);
     }
 
     private void sendMouse(String cmd) {
+        if (!"android".equals(stationMode)) {
+            if (!cmd.startsWith("m:")) {
+                toastOnce("Touchpad только в Android-режиме");
+            }
+            return;
+        }
         if (mouseClient != null) mouseClient.send(cmd);
     }
 
     private void sendVoice() {
         final String control = controlBase();
+        final String media = mediaHost();
         final String host = hostField.getText().toString().trim();
         new Thread(new Runnable() {
             @Override
             public void run() {
                 boolean ok = httpPost(control + "/ptt", "");
+                if (!ok) {
+                    ok = httpPost("http://" + media + ":8090/ptt", "");
+                }
                 if (!ok) {
                     // Legacy station listener; kept for older installs.
                     Socket s = null;
@@ -867,13 +1312,7 @@ public class MainActivity extends Activity {
                     }
                 }
                 if (!ok) {
-                    ui.post(new Runnable() {
-                        public void run() {
-                            Toast.makeText(MainActivity.this,
-                                    "Voice server :8090 недоступен",
-                                    Toast.LENGTH_SHORT).show();
-                        }
-                    });
+                    toast("Voice server недоступен");
                 }
             }
         }, "push-to-talk").start();
@@ -884,19 +1323,17 @@ public class MainActivity extends Activity {
         if (message.length() == 0) return;
         announceField.setText("");
         final String control = controlBase();
+        final String media = mediaHost();
         new Thread(new Runnable() {
             @Override
             public void run() {
                 boolean ok = httpPost(control + "/say", message);
+                if (!ok) {
+                    ok = httpPost("http://" + media + ":8090/say", message);
+                }
                 if (!ok) ok = speakDirect(message);
                 final boolean sent = ok;
-                ui.post(new Runnable() {
-                    public void run() {
-                        Toast.makeText(MainActivity.this,
-                                sent ? "Отправлено на станцию" : "Не удалось озвучить",
-                                Toast.LENGTH_SHORT).show();
-                    }
-                });
+                toast(sent ? "Отправлено на станцию" : "Не удалось озвучить");
             }
         }, "announce").start();
     }

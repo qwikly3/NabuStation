@@ -17,6 +17,10 @@ rest_command:
     url: "http://{{ states('input_text.nabustation_station_host') }}:8098/unmute"
     method: GET
     timeout: 5
+  nabustation_bt:
+    url: "http://{{ states('input_text.nabustation_station_host') }}:8098/bt?action={{ bt_action }}"
+    method: GET
+    timeout: 10
 
 binary_sensor:
   - platform: rest
@@ -55,3 +59,19 @@ intent_script:
   NabuVolumeAsk:
     speech:
       text: "На сколько процентов?"
+
+  NabuBluetoothOn:
+    speech:
+      text: "Включаю Bluetooth. Подключи телефон к NabuStation."
+    action:
+      - action: rest_command.nabustation_bt
+        data:
+          bt_action: start
+
+  NabuBluetoothOff:
+    speech:
+      text: "Выключаю Bluetooth. Возвращаю музыку."
+    action:
+      - action: rest_command.nabustation_bt
+        data:
+          bt_action: stop

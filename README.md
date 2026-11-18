@@ -1,19 +1,19 @@
-# NabuStation 1.0.1
+# NabuStation 1.1
 
 Голосовой ассистент для **root-станции Яндекс Станция 1**: Debian-режим
 (микрофонный массив, wake word «Окей Набу», AEC, Home Assistant Assist,
-Music Assistant, Spotify, громкость) и Android TV-режим (TV Launcher,
-Now Playing, SmartTube, Snapcast, телефонный пульт).
+Music Assistant, Spotify, громкость, время и сон) и Android TV-режим
+(TV Launcher, Now Playing, SmartTube, Snapcast, телефонный пульт).
 
 Проект модульный. Можно поставить только голосового ассистента в HA, без
 Spotify и даже без музыки. Можно добавить музыку, громкость, LED-кольцо,
 физический диск, кнопку, Android TV/визуализатор и пульт.
 
-> Версия: **1.0.1**
+> Версия: **1.1**
 >
-> Статус: быстрые победы после первого релиза. Проверено на Station 1 с
-> Debian, Home Assistant 2026.7, Music Assistant server и Spotify
-> Premium/Soloist.
+> Статус: время и сон, Spotify Connect, локальные музыкальные команды.
+> Проверено на Station 1 с Debian, Home Assistant 2026.7, Music Assistant
+> server и Spotify Premium/Soloist.
 
 ---
 
@@ -32,6 +32,8 @@ Spotify и даже без музыки. Можно добавить музык�
   - [5. Home Assistant](#5-home-assistant)
   - [6. Music Assistant и Snapcast](#6-music-assistant-и-snapcast)
   - [7. Spotify и like/unlike](#7-spotify-и-likeunlike)
+  - [8. Время и сон](#8-время-и-сон)
+  - [9. Spotify Connect и AI DJ](#9-spotify-connect-и-ai-dj)
 - [Android TV-режим](#android-tv-режим)
 - [Только ассистент, без Spotify](#только-ассистент-без-spotify)
 - [Конфигурация](#конфигурация)
@@ -40,7 +42,7 @@ Spotify и даже без музыки. Можно добавить музык�
 - [Диагностика](#диагностика)
 - [Безопасность](#безопасность)
 - [Обновление и удаление](#обновление-и-удаление)
-- [Ограничения версии 1.0](#ограничения-версии-10)
+- [Ограничения версии 1.1](#ограничения-версии-11)
 - [Планы разработки](ROADMAP.md)
 - [Благодарности](#благодарности)
 - [Лицензия](#лицензия)
@@ -62,8 +64,20 @@ Spotify и даже без музыки. Можно добавить музык�
 - Голосом: пауза, продолжить, дальше, назад, перемешать, что за трек.
 - Очередь: «что дальше», убрать следующий/текущий, очистить.
 - Repeat, перемотка ±10 секунд, «в начало», похожее/радио, добавить в очередь.
-- Spotify: поставить/убрать лайк, включить Liked Songs.
-- Погода, время, «что сегодня», «доброе утро» / «доброй ночи».
+- Spotify: поставить/убрать лайк, включить Liked Songs, поиск и запуск
+  трека/альбома/исполнителя/плейлиста/подкаста/аудиокниги, создание
+  плейлиста и добавление текущего трека.
+- Spotify Connect: станция видна в приложении Spotify как устройство
+  `Station 1`; запуск AI DJ из Spotify, смена треков DJ голосом/кнопкой.
+- Таймеры: любая длительность, несколько штук, имена, список, отмена,
+  продление; сначала звук `timer.wav`, потом TTS.
+- Sleep timer Music Assistant: старт, продление, отмена, статус.
+- Будильники: сегодня/завтра/послезавтра/дата, дни недели, несколько штук,
+  список, отмена, snooze «ещё N минут», песня на будильник, LED-рассвет.
+- Громкость будильника 5% → 70% за 3 минуты, затем возврат к обычной.
+- Ночной режим: LED off, 5%, музыка на паузе, автовыход в 10:00
+  (настраивается).
+- Погода, время, «что сегодня», «доброе утро» со сводкой, «доброй ночи».
 - «Объяви …» и озвучка текста с телефона.
 - Дакинг музыки без паузы: Music Assistant volume 15% при громкой станции
   и 5% при тихой; усилитель остаётся на 5%.
@@ -126,9 +140,15 @@ RemoteDaemon `:8096`, touchpad `:8097` и веб-пульт `:8080`. Голос�
 | `voice-server/` | wake word, AEC, Assist, TTS-плеер | если не нужен голос |
 | `silero-tts/` | локальный русский TTS | если используете другой TTS |
 | `home-assistant/packages/nabustation_helpers.yaml` | helper-сущности | только если не нужен now playing/музыка |
-| `home-assistant/packages/nabustation_core.yaml` | pause/resume/next/prev/shuffle/now playing, queue, repeat, seek, similar, weather/time, announce | если не нужна музыка |
+| `home-assistant/packages/nabustation_core.yaml` | pause/resume/next/prev/shuffle/now playing, queue, repeat, seek, similar, weather/time, announce, утро | если не нужна музыка |
 | `home-assistant/packages/nabustation_volume.yaml` | громкость через HTTP станции | если нет Debian-громкости |
-| `home-assistant/packages/nabustation_spotify.yaml` | «включи музыку», like/unlike | если нет Spotify |
+| `home-assistant/packages/nabustation_spotify.yaml` | «включи музыку», like/unlike, AI DJ | если нет Spotify |
+| `home-assistant/packages/nabustation_timers.yaml` | таймеры | если не нужны таймеры |
+| `home-assistant/packages/nabustation_sleep.yaml` | sleep timer MA | если не нужен sleep timer |
+| `home-assistant/packages/nabustation_alarms.yaml` | будильники | если не нужны будильники |
+| `home-assistant/packages/nabustation_night.yaml` | ночной режим | если не нужен ночной режим |
+| `home-assistant/packages/nabustation_search.yaml` | поиск и запуск по названию | если не нужен поиск |
+| `home-assistant/packages/nabustation_playlists.yaml` | создание плейлистов | если не нужны плейлисты |
 | `home-assistant/custom_sentences/ru/*` | русские фразы | если другой язык |
 | `music-assistant/` | MA/Snapcast + Spotify + patch | если нет музыки/Spotify |
 | `android/` | Android TV: launcher, Now Playing, SmartTube, Snapcast, RemoteDaemon, phone remote | если станция в Debian-режиме |
@@ -436,9 +456,16 @@ curl -X POST 'http://<HA_IP>:8090/say?text=Привет'
    mkdir -p /config/packages
    cp home-assistant/packages/nabustation_helpers.yaml /config/packages/
    cp home-assistant/packages/nabustation_core.yaml /config/packages/
+   # время и сон:
+   cp home-assistant/packages/nabustation_timers.yaml /config/packages/
+   cp home-assistant/packages/nabustation_sleep.yaml /config/packages/
+   cp home-assistant/packages/nabustation_alarms.yaml /config/packages/
+   cp home-assistant/packages/nabustation_night.yaml /config/packages/
    # опционально:
    cp home-assistant/packages/nabustation_volume.yaml /config/packages/
    cp home-assistant/packages/nabustation_spotify.yaml /config/packages/
+   cp home-assistant/packages/nabustation_search.yaml /config/packages/
+   cp home-assistant/packages/nabustation_playlists.yaml /config/packages/
    ```
 
 3. Скопируйте фразы:
@@ -446,18 +473,27 @@ curl -X POST 'http://<HA_IP>:8090/say?text=Привет'
    ```bash
    mkdir -p /config/custom_sentences/ru
    cp home-assistant/custom_sentences/ru/music_core.yaml /config/custom_sentences/ru/
+   cp home-assistant/custom_sentences/ru/timers.yaml /config/custom_sentences/ru/
+   cp home-assistant/custom_sentences/ru/sleep.yaml /config/custom_sentences/ru/
+   cp home-assistant/custom_sentences/ru/alarms.yaml /config/custom_sentences/ru/
+   cp home-assistant/custom_sentences/ru/night.yaml /config/custom_sentences/ru/
    # опционально:
    cp home-assistant/custom_sentences/ru/volume.yaml /config/custom_sentences/ru/
    cp home-assistant/custom_sentences/ru/music_spotify.yaml /config/custom_sentences/ru/
+   cp home-assistant/custom_sentences/ru/music_search.yaml /config/custom_sentences/ru/
+   cp home-assistant/custom_sentences/ru/music_playlists.yaml /config/custom_sentences/ru/
    ```
 
-4. Скрипты для очереди и Spotify:
+4. Скрипты:
 
    ```bash
    mkdir -p /config/scripts
    cp home-assistant/scripts/music_queue.py /config/scripts/
-   # опционально, для Spotify like/unlike:
+   cp home-assistant/scripts/music_sleep.py /config/scripts/
+   # опционально, для Spotify:
    cp home-assistant/scripts/music_like.py /config/scripts/
+   cp home-assistant/scripts/music_play.py /config/scripts/
+   cp home-assistant/scripts/music_playlist.py /config/scripts/
    cp home-assistant/nabustation.json.example /config/nabustation.json
    ```
 
@@ -474,7 +510,12 @@ curl -X POST 'http://<HA_IP>:8090/say?text=Привет'
    - `input_text.nabustation_voice_host` — IP voice server (обычно `127.0.0.1`);
    - `input_text.nabustation_weather_entity` — weather-сущность;
    - `input_text.nabustation_liked_playlist` — URI Liked Songs (Spotify);
-   - `input_text.nabustation_last_result` — оставить пустым.
+   - `input_text.nabustation_last_result` — оставить пустым;
+   - `input_text.nabustation_timers_status` — статус таймеров;
+   - `input_text.nabustation_sleep_status` — статус sleep timer;
+   - `input_text.nabustation_alarms_status` — список будильников;
+   - `input_text.nabustation_next_alarm` — ближайший будильник;
+   - `input_text.nabustation_night_status` — статус ночного режима.
 
 7. Включите `prefer_local_intents` в пайплайне Assist, чтобы фразы
    обрабатывались локально, без LLM.
@@ -541,6 +582,91 @@ agent_id: conversation.home_assistant
 Если MA обновился, patch нужно применить заново. Скрипт идемпотентный и
 делает backup `/data/provider.py.bak-spotify-like`.
 
+### 8. Время и сон
+
+Пакеты `nabustation_timers.yaml`, `nabustation_sleep.yaml`,
+`nabustation_alarms.yaml`, `nabustation_night.yaml` и скрипт
+`music_sleep.py`. Все таймеры, будильники и ночной режим живут в
+voice server; HA только передаёт команды и показывает статус.
+
+- **Таймеры** — любая длительность, несколько одновременно, имена,
+  список, отмена конкретного/всех, продление. Перед TTS полностью играет
+  `voice-server/sounds/timer.wav`.
+- **Sleep timer** — нативный таймер Music Assistant: старт, продление,
+  отмена, статус. Без отдельного fade: громкость не «плывёт».
+- **Будильники** — «сегодня/завтра/послезавтра/25 ноября», «9 вечера»,
+  «7:30», «по будням», «по выходным», «каждый день». Несколько штук,
+  список, отмена, snooze «ещё 5 минут».
+- **Звонок** — старт с 5%, плавный подъём до **70%** за 3 минуты,
+  LED-рассвет. «Стоп» работает без wake word, по wake word и кнопкой
+  Алисы. После остановки возвращается громкость, которая была до звонка
+  (в ночном режиме — 5%).
+- **Песня на будильник** — «поставь на будильник песню …»; хранится URI
+  Music Assistant. Без песни играет `alarm.mp3`.
+- **Ночной режим** — «ночной режим»: музыка пауза, LED off, громкость 5%.
+  Автовыход по умолчанию в **10:00**; изменить: «ночной режим до 09:30».
+  «Выключи ночной режим» возвращает обычную громкость.
+- **«Доброе утро»** — дата/время, погода, ближайший будильник, включённый
+  свет и открытые окна/двери. Без календаря и без автозапуска музыки.
+
+Состояние лежит рядом с voice server:
+
+```text
+timers.json
+alarms.json
+alarm_media.json
+night.json
+```
+
+Время будильников считается по часовому поясу Home Assistant
+(`/api/config` → `time_zone`), а не по времени Linux-хоста. Это важно,
+если станция и HA в разных зонах.
+
+API voice server (порт 8090):
+
+```bash
+curl 'http://127.0.0.1:8090/timer?action=list'
+curl 'http://127.0.0.1:8090/alarm?action=list'
+curl 'http://127.0.0.1:8090/alarm?action=stop'
+curl 'http://127.0.0.1:8090/night?action=status'
+```
+
+### 9. Spotify Connect и AI DJ
+
+Подробная инструкция: [`docs/spotify-connect.md`](docs/spotify-connect.md).
+
+1. В Music Assistant добавьте плагин **Spotify Connect**.
+2. Backend — **Spotify Soloist (official)**, примите условия и вставьте
+   Soloist API key (тот же, что у Spotify provider).
+3. В `Connected players` выберите MA-плеер станции (`Station 1`).
+4. В Spotify на телефоне/ноутбуке выберите устройство `Station 1`.
+
+Звук идёт `Spotify → MA → Snapcast → Station 1`; librespot на станции не
+используется. Громкость лучше держать в режиме `Player volume only`.
+
+Голосом:
+
+- «включи песню …», «включи альбом …», «включи исполнителя …»,
+  «включи плейлист …», «включи подкаст …», «включи аудиокнигу …» —
+  локальный поиск MA, без LLM;
+- «поставь лайк» / «убери лайк» — работает и в обычной очереди MA, и во
+  время Spotify Connect;
+- «создай плейлист …», «добавь текущий трек в плейлист …»;
+- «смени треки», «переключи трек», «следующий трек» — следующий трек,
+  в том числе во время Spotify Connect/DJ.
+
+**AI DJ.** Spotify не отдаёт запуск DJ через Web API/Connect, поэтому
+голосом со станции DJ не стартует. Запускайте его из приложения Spotify.
+В телефонном пульте **1.9** есть кнопка **DJ**, открывающая DJ в Spotify.
+Фраза «включи диджей» обрабатывается локально и не уходит в Groq; она
+подсказывает нажать кнопку. Смена треков DJ работает командой
+«смени треки» или кнопкой NEXT.
+
+Если Spotify отвечает `Your current speaker does not support interaction
+with DJ`, это ограничение Spotify для сторонних Connect-устройств.
+Альтернатива — плагин **AI Radio** в Music Assistant (свои голосовые
+вставки между треками).
+
 ---
 
 ## Android TV-режим
@@ -558,7 +684,8 @@ APK лежат в GitHub Releases, не в git. Скачать их:
 ./android/scripts/fetch_apks.sh
 ```
 
-Release: **https://github.com/qwikly3/NabuStation/releases/tag/v1.0.1**
+Release 1.0.1: **https://github.com/qwikly3/NabuStation/releases/tag/v1.0.1**
+Релиз 1.1 будет собран после коммита; APK 1.9 будет приложен к релизу.
 
 Кратко, на станции в Android с root/ADB:
 
@@ -578,8 +705,8 @@ PLAYER_ENTITY=media_player.station_1 \
 
 Телефонный пульт: `http://<STATION_IP>:8080/station-remote-modes.apk`.
 В приложении **SET** задайте IP станции и IP visualizer/HA. Пульт умеет
-PTT, озвучку текста (**ОЗВУЧИТЬ**), глобальные PREV/PLAY/NEXT, громкость
-и режимы YOUTUBE/MUSIC/TV.
+PTT, озвучку текста (**ОЗВУЧИТЬ**), глобальные PREV/PLAY/NEXT, громкость,
+режимы YOUTUBE/MUSIC/TV и кнопку **DJ** (Spotify Connect).
 
 Если HA-хост не `192.168.1.20`, пропатчьте Now Playing APK:
 
@@ -658,6 +785,12 @@ ANDROID_HOME=/path/to/sdk python patch_host.py --host <13-char-ha-ip>
 | `WAKE_HIGH` | `0.75` | сильный score |
 | `SILENCE_MS` | `600` | тишина для конца фразы |
 | `MAX_UTTERANCE_MS` | `6000` | аварийный лимит |
+| `ALARM_START_LEVEL` | `5` | старт будильника, % |
+| `ALARM_MAX_LEVEL` | `70` | максимум будильника, % |
+| `ALARM_RAMP_SECONDS` | `180` | подъём 5→70%, секунд |
+| `NIGHT_VOLUME` | `5` | громкость ночью, % |
+| `NIGHT_DEFAULT_EXIT` | `10:00` | выход из ночного режима |
+| `ALARM_TZ` | пусто | override часового пояса; пусто = HA |
 
 Полный пример: [`voice-server/voice.env.example`](voice-server/voice.env.example).
 
@@ -671,6 +804,11 @@ ANDROID_HOME=/path/to/sdk python patch_host.py --host <13-char-ha-ip>
 | `input_text.nabustation_weather_entity` | `weather.home` |
 | `input_text.nabustation_liked_playlist` | `library://playlist/12` |
 | `input_text.nabustation_last_result` | служебный, ответ последней команды |
+| `input_text.nabustation_timers_status` | служебный, список таймеров |
+| `input_text.nabustation_sleep_status` | служебный, sleep timer |
+| `input_text.nabustation_alarms_status` | служебный, список будильников |
+| `input_text.nabustation_next_alarm` | служебный, ближайший будильник |
+| `input_text.nabustation_night_status` | служебный, ночной режим |
 
 ---
 
@@ -705,6 +843,28 @@ ANDROID_HOME=/path/to/sdk python patch_host.py --host <13-char-ha-ip>
 | «громкость 5» | 5% на станции |
 | «громче» / «тише» | ±10% |
 | «стоп» / «выключи музыку» | стоп |
+| «заведи таймер на 10 минут» | таймер |
+| «поставь таймер на 1 час с названием …» | именованный таймер |
+| «какие таймеры» / «отмени таймер …» | список / отмена |
+| «продли таймер на 5 минут» | продление |
+| «выключи через 30 минут» | sleep timer MA |
+| «продли сон на 15 минут» / «отмени таймер сна» | sleep timer |
+| «будильник на 7:30» / «завтра на 9 вечера» | будильник |
+| «по будням на 7:00» / «каждый день на 6:45» | повтор |
+| «какие будильники» / «отмени все будильники» | список / отмена |
+| «ещё 5 минут» во время звонка | snooze |
+| «поставь на будильник песню …» | песня на будильник |
+| «ночной режим» / «доброй ночи» | ночной режим |
+| «выключи ночной режим» | выход из ночного режима |
+| «ночной режим до 9:30» | время выхода |
+| «доброе утро» | сводка: дата, погода, будильник, свет |
+| «включи песню …» / «включи плейлист …» | поиск и запуск в MA |
+| «включи альбом …» / «включи исполнителя …» | поиск и запуск |
+| «включи подкаст …» / «включи аудиокнигу …» | поиск и запуск |
+| «создай плейлист …» | новый плейлист Spotify |
+| «добавь текущий трек в плейлист …» | добавить в плейлист |
+| «смени треки» / «переключи трек» | следующий трек, в т.ч. Spotify Connect |
+| «включи диджей» | локальная подсказка про кнопку DJ в пульте |
 
 Команды работают локально в HA (`prefer_local_intents: true`), без LLM.
 Голосовой сервер также умеет локально обрабатывать «громкость N»,
@@ -955,7 +1115,7 @@ rm ~/.config/systemd/user/station-voice.service
 
 ---
 
-## Ограничения версии 1.0
+## Ограничения версии 1.1
 
 - Нет автоматической установки Debian rootfs/ядра и Android ROM/root.
 - Исходников оригинального Now Playing APK нет; в репозитории лежит
@@ -964,6 +1124,11 @@ rm ~/.config/systemd/user/station-voice.service
   vendor `busybox-smp`); на другой прошивке пути/пакеты могут отличаться.
 - Spotify patch привязан к внутренностям MA; после обновления MA его
   нужно применять заново.
+- Будильники и таймеры живут в voice server на HA-хосте. Если HA-хост
+  выключен, локального fallback на станции пока нет.
+- Spotify AI DJ запускается только из приложения Spotify: Spotify не
+  отдаёт DJ через Web API/Connect. Кнопка DJ в пульте открывает DJ.
+- Spotify Connect требует одну локальную сеть для телефона и MA.
 - Русские custom sentences; для другого языка нужен перевод.
 - Один voice server на одну станцию (можно запустить несколько
   экземпляров с разными `voice.env` и портами).

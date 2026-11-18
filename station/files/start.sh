@@ -20,6 +20,7 @@ mkdir -p "$VOICE_DIR"
 pkill -f "$VOICE_DIR/mic.sh" 2>/dev/null
 pkill -f "$VOICE_DIR/play.sh" 2>/dev/null
 pkill -f "$VOICE_DIR/led.sh" 2>/dev/null
+pkill -f sunrise.sh 2>/dev/null
 pkill -f "$VOICE_DIR/dial.py" 2>/dev/null
 pkill -f "$VOICE_DIR/button.py" 2>/dev/null
 pkill -f "nc -l -p 809" 2>/dev/null
@@ -35,6 +36,7 @@ amixer -c "$AMP_CARD" sset 'Tweeters Master' "$AMP_SAFE_LEVEL" >/dev/null 2>&1
 "$VOICE_DIR/mic.sh" &
 "$VOICE_DIR/play.sh" &
 "$VOICE_DIR/led.sh" &
+"$VOICE_DIR/wifi-5g.sh" >> "$VOICE_DIR/wifi-5g.log" 2>&1 &
 python3 "$VOICE_DIR/dial.py" >> "$VOICE_DIR/dial.log" 2>&1 &
 python3 "$VOICE_DIR/button.py" >> "$VOICE_DIR/button.log" 2>&1 &
 wait

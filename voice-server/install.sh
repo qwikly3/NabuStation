@@ -80,6 +80,8 @@ for f in station_voice.py speex_aec.py aec.py; do
   fi
   cp -a "$SCRIPT_DIR/$f" "$INSTALL_DIR/$f"
 done
+mkdir -p "$INSTALL_DIR/sounds"
+cp -a "$SCRIPT_DIR/sounds/." "$INSTALL_DIR/sounds/"
 
 TOKEN_FILE="$INSTALL_DIR/ha_token.txt"
 if [ -n "${HA_TOKEN:-}" ]; then

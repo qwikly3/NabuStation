@@ -53,11 +53,13 @@ intent_script:
 
   NabuStopMusic:
     speech:
-      text: ""
+      text: "Остановил."
     action:
       - action: script.nabustation_music_control
         data:
           action: stop
+      - action: rest_command.nabustation_alarm_stop
+        continue_on_error: true
 
   # --- quick wins: queue / repeat / seek / similar ------------------------
   NabuQueueNext:
@@ -245,7 +247,12 @@ intent_script:
   NabuMorning:
     speech:
       text: >-
-        Доброе утро.
+        {% set months = ['января', 'февраля', 'марта', 'апреля', 'мая', 'июня',
+                         'июля', 'августа', 'сентября', 'октября', 'ноября', 'декабря'] %}
+        {% set days = ['понедельник', 'вторник', 'среда', 'четверг',
+                       'пятница', 'суббота', 'воскресенье'] %}
+        Доброе утро. Сегодня {{ now().day }} {{ months[now().month - 1] }},
+        {{ days[now().weekday()] }}, {{ now().strftime('%H:%M') }}.
         {% set configured = states('input_text.nabustation_weather_entity') %}
         {% set fallback = (states.weather | map(attribute='entity_id') | list | first) if states.weather else '' %}
         {% set entity = configured if configured not in ['', 'unknown', 'unavailable'] else fallback %}
@@ -253,25 +260,34 @@ intent_script:
         {% set temp = state_attr(entity, 'temperature') %}
         {% set n = temp | round(0) | int if temp is not none else none %}
         {% set unit = '' if n is none else ('градус' if n % 10 == 1 and n % 100 != 11 else ('градуса' if n % 10 in [2, 3, 4] and n % 100 not in [12, 13, 14] else 'градусов')) %}
-        {% if n is not none %}На улице {{ n }} {{ unit }}.{% endif %}
+        {% set names = {
+          'clear-night': 'ясно', 'cloudy': 'облачно', 'fog': 'туман',
+          'hail': 'град', 'lightning': 'гроза',
+          'lightning-rainy': 'гроза с дождём',
+          'partlycloudy': 'переменная облачность',
+          'pouring': 'сильный дождь', 'rainy': 'дождь', 'snowy': 'снег',
+          'snowy-rainy': 'снег с дождём', 'sunny': 'солнечно',
+          'windy': 'ветрено', 'windy-variant': 'ветрено',
+          'exceptional': 'аномальная погода'
+        } %}
+        На улице {% if n is not none %}{{ n }} {{ unit }}{% endif %}{% if states(entity) %}, {{ names.get(states(entity), states(entity)) }}{% endif %}.
+        {% endif %}
+        {{ states('input_text.nabustation_next_alarm') }}
+        {% set lights = states.light | selectattr('state', 'eq', 'on') | list %}
+        {% if lights %}
+        Свет включён: {{ lights[:4] | map(attribute='name') | join(', ') }}.
+        {% else %}
+        Свет выключен.
+        {% endif %}
+        {% set openings = states.binary_sensor
+             | selectattr('state', 'eq', 'on')
+             | selectattr('attributes.device_class', 'in', ['door', 'window', 'garage_door'])
+             | list %}
+        {% if openings %}
+        Открыто: {{ openings[:4] | map(attribute='name') | join(', ') }}.
         {% endif %}
     action:
-      - action: rest_command.nabustation_station_volume
-        data:
-          level: 5
-        continue_on_error: true
-      - action: script.nabustation_music_resume
-
-  NabuNight:
-    speech:
-      text: "Доброй ночи."
-    action:
-      - action: script.nabustation_music_control
-        data:
-          action: pause
-      - action: rest_command.nabustation_station_volume
-        data:
-          level: 5
+      - action: rest_command.nabustation_night_off
         continue_on_error: true
 
 rest_command:

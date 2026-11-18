@@ -10,6 +10,7 @@ Endpoints:
   GET /volume?delta=10
   GET /mute
   GET /unmute
+  GET /bt?action=start|stop|toggle|status
 """
 from __future__ import annotations
 
@@ -31,8 +32,16 @@ AMP_CARD = os.environ.get("AMP_CARD", "1")
 AMP_MIN = int(os.environ.get("AMP_MIN", "350"))
 AMP_MAX = int(os.environ.get("AMP_MAX", "850"))
 DEFAULT_LEVEL = int(os.environ.get("DEFAULT_LEVEL", "5"))
+BT_SCRIPT = os.environ.get(
+    "BT_SCRIPT", os.path.join(VOICE_DIR, "bluetooth_mode.sh")
+)
+BT_STATE_FILE = os.environ.get("BT_STATE_FILE", "/run/nabustation-bt.state")
 
 LOCK = threading.Lock()
+
+
+def bt_on() -> bool:
+    return os.path.exists(BT_STATE_FILE)
 
 
 def read_level() -> int:
@@ -103,8 +112,62 @@ class Handler(BaseHTTPRequestHandler):
                         "mode": "debian",
                         "level": level,
                         "amp": amp_for(level),
+                        "bt": bt_on(),
                     },
                 )
+                return
+            if url.path == "/bt":
+                action = (q.get("action") or ["status"])[0]
+                if action not in ("start", "stop", "toggle", "status"):
+                    self.reply(400, {"ok": False, "error": "bad action"})
+                    return
+                if action == "status":
+                    try:
+                        out = subprocess.run(
+                            [BT_SCRIPT, "status"],
+                            capture_output=True,
+                            text=True,
+                            timeout=6,
+                        )
+                        self.reply(
+                            200,
+                            {
+                                "ok": True,
+                                "action": action,
+                                "bt": bt_on(),
+                                "status": out.stdout.strip(),
+                                "error": out.stderr.strip(),
+                            },
+                        )
+                    except Exception as exc:  # noqa: BLE001
+                        self.reply(
+                            500, {"ok": False, "action": action, "error": str(exc)}
+                        )
+                    return
+                try:
+                    # Do not block the HTTP request: the script may wait a few
+                    # seconds so the voice reply can finish before Snapcast
+                    # stops.
+                    log = open("/var/log/nabustation-bt.log", "ab")
+                    subprocess.Popen(
+                        [BT_SCRIPT, action],
+                        stdout=log,
+                        stderr=log,
+                        start_new_session=True,
+                    )
+                    self.reply(
+                        200,
+                        {
+                            "ok": True,
+                            "action": action,
+                            "bt": bt_on(),
+                            "started": True,
+                        },
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    self.reply(
+                        500, {"ok": False, "action": action, "error": str(exc)}
+                    )
                 return
             if url.path == "/volume":
                 if "level" in q:

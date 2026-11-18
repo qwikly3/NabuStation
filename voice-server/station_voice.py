@@ -18,7 +18,14 @@ import math
 import os
 import re
 import time
+import uuid
 import wave
+from datetime import datetime, timedelta
+
+try:
+    from zoneinfo import ZoneInfo
+except ImportError:  # pragma: no cover - Python < 3.9
+    ZoneInfo = None  # type: ignore[assignment]
 
 import aiohttp
 import miniaudio
@@ -46,6 +53,33 @@ BUTTON_PORT = int(os.environ.get("BUTTON_PORT", "8095"))
 COMMAND_PORT = int(os.environ.get("COMMAND_PORT", "8096"))
 CONTROL_PORT = int(os.environ.get("CONTROL_PORT", "8090"))
 CONTROL_BIND = os.environ.get("CONTROL_BIND", "0.0.0.0")
+TIMER_FILE = os.environ.get(
+    "TIMER_FILE",
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "timers.json"),
+)
+ALARM_FILE = os.environ.get(
+    "ALARM_FILE",
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "alarms.json"),
+)
+ALARM_MEDIA_FILE = os.environ.get(
+    "ALARM_MEDIA_FILE",
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "alarm_media.json"),
+)
+ALARM_TZ_NAME = os.environ.get("ALARM_TZ", "").strip()
+NIGHT_FILE = os.environ.get(
+    "NIGHT_FILE",
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "night.json"),
+)
+NIGHT_VOLUME = int(os.environ.get("NIGHT_VOLUME", "5"))
+NIGHT_DEFAULT_EXIT = os.environ.get("NIGHT_DEFAULT_EXIT", "10:00").strip()
+ALARM_START_LEVEL = int(os.environ.get("ALARM_START_LEVEL", "5"))
+ALARM_MAX_LEVEL = int(os.environ.get("ALARM_MAX_LEVEL", "70"))
+ALARM_RAMP_SECONDS = int(os.environ.get("ALARM_RAMP_SECONDS", "180"))
+ALARM_DUCK_LEVEL = int(os.environ.get("ALARM_DUCK_LEVEL", "5"))
+ALARM_DUCK_SECONDS = float(os.environ.get("ALARM_DUCK_SECONDS", "6"))
+ALARM_WAKE_THRESHOLD = float(os.environ.get("ALARM_WAKE_THRESHOLD", "0.35"))
+ALARM_WAKE_HITS = int(os.environ.get("ALARM_WAKE_HITS", "1"))
+ALARM_MAX_UTTERANCE_MS = int(os.environ.get("ALARM_MAX_UTTERANCE_MS", "4000"))
 DEBIAN_VOLUME_URL = os.environ.get(
     "DEBIAN_VOLUME_URL", f"http://{STATION}:8098"
 )
@@ -81,6 +115,9 @@ TTS_RATE = int(os.environ.get("TTS_RATE", "48000"))
 TTS_GAIN = float(os.environ.get("TTS_GAIN", "0.9"))
 SILERO_URL = os.environ.get("SILERO_URL", "http://127.0.0.1:10400/tts")
 SILERO_VOICE = os.environ.get("SILERO_VOICE", "eugene")
+SOUND_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sounds")
+TIMER_SOUND = os.environ.get("TIMER_SOUND", os.path.join(SOUND_DIR, "timer.wav"))
+ALARM_SOUND = os.environ.get("ALARM_SOUND", os.path.join(SOUND_DIR, "alarm.mp3"))
 CAST_AGENT_URL = os.environ.get("CAST_AGENT_URL", "http://127.0.0.1:8770")
 CAST_TOKEN_FILE = os.environ.get(
     "CAST_TOKEN_FILE", os.path.expanduser("~/nabustation/voice/cast_token.txt")
@@ -190,6 +227,30 @@ def load_wake_sound(path: str, target_peak: int = 24000) -> bytes:
     if peak > 0:
         trimmed = np.clip(trimmed * min(4.0, target_peak / peak), -32768, 32767)
     return pcm_to_wav(trimmed.astype(np.int16).tobytes(), rate, channels)
+
+
+def load_sound_48k(path: str, target_peak: int = 24000) -> bytes:
+    """Decode WAV/MP3, resample to TTS_RATE, convert to stereo, trim, normalize."""
+    decoded = miniaudio.decode_file(
+        path,
+        output_format=miniaudio.SampleFormat.SIGNED16,
+        nchannels=2,
+        sample_rate=TTS_RATE,
+    )
+    pcm = np.frombuffer(decoded.samples, dtype=np.int16).copy()
+    if len(pcm) < 2:
+        raise ValueError("empty sound")
+    levels = np.max(np.abs(pcm.reshape(-1, 2)), axis=1)
+    active = np.flatnonzero(levels > 250)
+    if len(active) == 0:
+        return pcm_to_wav(pcm.tobytes(), TTS_RATE, 2)
+    start = max(0, int(active[0]) - int(TTS_RATE * 0.01))
+    end = min(len(levels), int(active[-1]) + int(TTS_RATE * 0.08))
+    trimmed = pcm[start * 2:end * 2].astype(np.float32)
+    peak = float(np.max(np.abs(trimmed))) if len(trimmed) else 0.0
+    if peak > 0:
+        trimmed = np.clip(trimmed * min(4.0, target_peak / peak), -32768, 32767)
+    return pcm_to_wav(trimmed.astype(np.int16).tobytes(), TTS_RATE, 2)
 
 
 def split_sentences(text: str, max_len: int = 180) -> list[str]:
@@ -456,6 +517,291 @@ def parse_percent(text: str) -> int | None:
     return total if found and 0 <= total <= 100 else None
 
 
+def parse_duration(text: str) -> int | None:
+    """Parse Russian/plain durations into seconds; bare numbers are minutes."""
+    text = (text or "").strip().lower().replace("ё", "е").replace(",", " ")
+    if not text:
+        return None
+    total = 0
+    for match in re.finditer(r"(\d+)\s*(час|часа|часов|ч)\b", text):
+        total += int(match.group(1)) * 3600
+    for match in re.finditer(r"(\d+)\s*(минут|минуты|минуту|мин|м)\b", text):
+        total += int(match.group(1)) * 60
+    for match in re.finditer(r"(\d+)\s*(секунд|секунды|секунду|сек|с)\b", text):
+        total += int(match.group(1))
+    if total:
+        return total
+    if "полтора час" in text:
+        return 90 * 60
+    if "полчас" in text:
+        return 30 * 60
+    match = re.search(r"\d+", text)
+    if match:
+        return int(match.group(0)) * 60
+    return None
+
+
+_WEEKDAY_NAMES = {
+    "понедельник": 0,
+    "вторник": 1,
+    "среда": 2,
+    "среду": 2,
+    "четверг": 3,
+    "пятница": 4,
+    "пятницу": 4,
+    "суббота": 5,
+    "субботу": 5,
+    "воскресенье": 6,
+}
+_MONTH_NAMES = {
+    "января": 1,
+    "февраля": 2,
+    "марта": 3,
+    "апреля": 4,
+    "мая": 5,
+    "июня": 6,
+    "июля": 7,
+    "августа": 8,
+    "сентября": 9,
+    "октября": 10,
+    "ноября": 11,
+    "декабря": 12,
+}
+_MONTHS_RU = [
+    "января",
+    "февраля",
+    "марта",
+    "апреля",
+    "мая",
+    "июня",
+    "июля",
+    "августа",
+    "сентября",
+    "октября",
+    "ноября",
+    "декабря",
+]
+_WEEKDAY_DATIVE = [
+    "понедельникам",
+    "вторникам",
+    "средам",
+    "четвергам",
+    "пятницам",
+    "субботам",
+    "воскресеньям",
+]
+
+
+def resolve_timezone(name: str | None):
+    """Return a tzinfo for the configured name; fall back to system local time."""
+    if name:
+        if ZoneInfo is not None:
+            try:
+                return ZoneInfo(name)
+            except Exception as exc:  # noqa: BLE001
+                log.warning("timezone %s unavailable (%s); using system time", name, exc)
+        else:
+            log.warning("zoneinfo unavailable; using system time")
+    return datetime.now().astimezone().tzinfo
+
+
+def parse_time_text(text: str) -> tuple[int, int] | None:
+    """Parse a Russian time phrase like 10:00, 9 утра or 9 вечера."""
+    low = (text or "").strip().lower().replace("ё", "е")
+    if not low:
+        return None
+    match = re.search(r"(\d{1,2})[:.](\d{2})", low)
+    if match:
+        hour, minute = int(match.group(1)), int(match.group(2))
+    else:
+        match = re.search(
+            r"(\d{1,2})\s*(утра|вечера|дня|ночи|час|часа|часов)\b", low
+        )
+        if match:
+            hour, minute = int(match.group(1)), 0
+            qualifier = match.group(2)
+            if "вечера" in qualifier and hour < 12:
+                hour += 12
+            elif "дня" in qualifier and 1 <= hour < 12:
+                hour += 12
+            elif "ночи" in qualifier and hour == 12:
+                hour = 0
+            elif "утра" in qualifier and hour == 12:
+                hour = 0
+        else:
+            match = re.search(r"(?:на|в|до)\s+(\d{1,2})(?:\s|$)", low)
+            if not match:
+                return None
+            hour, minute = int(match.group(1)), 0
+    if 0 <= hour <= 23 and 0 <= minute <= 59:
+        return hour, minute
+    return None
+
+
+def parse_alarm_text(
+    text: str, now: datetime | None = None, tz=None
+) -> dict | None:
+    """Parse Russian alarm phrases into at/time/weekdays."""
+    text = (text or "").strip().lower().replace("ё", "е").replace(",", " ")
+    if not text:
+        return None
+    if now is None:
+        base = datetime.now(tz)
+    else:
+        base = now.replace(tzinfo=tz) if tz is not None and now.tzinfo is None else now
+    local_tz = base.tzinfo
+
+    def combine_at(day) -> datetime:
+        return datetime.combine(
+            day, datetime.min.time(), tzinfo=local_tz
+        ).replace(hour=hour, minute=minute)
+
+    # Time: 7:30, 7.30, 9 вечера, 9 утра.
+    hour = minute = None
+    match = re.search(r"(\d{1,2})[:.](\d{2})", text)
+    if match:
+        hour, minute = int(match.group(1)), int(match.group(2))
+    else:
+        match = re.search(
+            r"(\d{1,2})\s*(утра|вечера|дня|ночи|час|часа|часов)\b", text
+        )
+        if match:
+            hour, minute = int(match.group(1)), 0
+            qualifier = match.group(2)
+            if "вечера" in qualifier and hour < 12:
+                hour += 12
+            elif "дня" in qualifier and 1 <= hour < 12:
+                hour += 12
+            elif "ночи" in qualifier and hour == 12:
+                hour = 0
+            elif "утра" in qualifier and hour == 12:
+                hour = 0
+    if hour is None:
+        match = re.search(r"(?:на|в)\s+(\d{1,2})(?:\s|$)", text)
+        if match:
+            hour, minute = int(match.group(1)), 0
+    if hour is None or not (0 <= hour <= 23) or not (0 <= minute <= 59):
+        return None
+    alarm_time = (hour, minute)
+
+    # Repeat weekdays.
+    weekdays: list[int] = []
+    if "каждый день" in text or "ежедневно" in text:
+        weekdays = list(range(7))
+    elif "по будням" in text or "будни" in text:
+        weekdays = list(range(5))
+    elif "по выходным" in text or "выходные" in text:
+        weekdays = [5, 6]
+    else:
+        for name, index in _WEEKDAY_NAMES.items():
+            if name in text and index not in weekdays:
+                weekdays.append(index)
+        weekdays.sort()
+
+    time_str = f"{hour:02d}:{minute:02d}"
+
+    if weekdays:
+        best = None
+        for offset in range(8):
+            day = base.date() + timedelta(days=offset)
+            if day.weekday() not in weekdays:
+                continue
+            candidate = combine_at(day)
+            if candidate > base:
+                best = candidate
+                break
+        if best is None:
+            return None
+        return {
+            "at": best.timestamp(),
+            "time": time_str,
+            "weekdays": weekdays,
+            "label": text,
+        }
+
+    # One-shot date.
+    explicit = False
+    date = base.date()
+    if "послезавтра" in text:
+        date = base.date() + timedelta(days=2)
+        explicit = True
+    elif "завтра" in text:
+        date = base.date() + timedelta(days=1)
+        explicit = True
+    elif "сегодня" in text:
+        explicit = True
+    else:
+        match = re.search(
+            r"(\d{1,2})\s+(января|февраля|марта|апреля|мая|июня|июля|августа|сентября|октября|ноября|декабря)\b",
+            text,
+        )
+        if match:
+            day = int(match.group(1))
+            month = _MONTH_NAMES[match.group(2)]
+            year = base.year
+            try:
+                date = datetime(year, month, day).date()
+            except ValueError:
+                return None
+            if date < base.date():
+                date = datetime(year + 1, month, day).date()
+            explicit = True
+
+    candidate = combine_at(date)
+    if candidate <= base:
+        if explicit:
+            return None
+        candidate += timedelta(days=1)
+    return {
+        "at": candidate.timestamp(),
+        "time": time_str,
+        "weekdays": [],
+        "label": text,
+    }
+
+
+def parse_snooze_text(text: str) -> int | None:
+    """Return snooze minutes for phrases like «ещё 5 минут»."""
+    low = (text or "").strip().lower().replace("ё", "е")
+    if not low:
+        return None
+    strong = any(
+        token in low
+        for token in ("отлож", "snooze", "поспи", "поспать", "позже")
+    )
+    if not strong:
+        # Plain "ещё" is too common in TV speech; require a number or "минут".
+        if "еще" not in low:
+            return None
+        if not re.search(r"\d", low) and "минут" not in low:
+            return None
+    match = re.search(r"(\d{1,2})", low)
+    minutes = int(match.group(1)) if match else 5
+    if 1 <= minutes <= 60:
+        return minutes
+    return None
+
+
+def format_minutes(count: int) -> str:
+    n = abs(int(count))
+    if n % 10 == 1 and n % 100 != 11:
+        return f"{n} минуту"
+    if n % 10 in (2, 3, 4) and n % 100 not in (12, 13, 14):
+        return f"{n} минуты"
+    return f"{n} минут"
+
+
+def format_remaining(seconds: int) -> str:
+    seconds = max(0, int(seconds))
+    minutes = seconds // 60
+    if minutes >= 60:
+        hours, minutes = divmod(minutes, 60)
+        return f"{hours} ч {minutes} мин" if minutes else f"{hours} ч"
+    if minutes:
+        return f"{minutes} мин"
+    return f"{seconds} сек"
+
+
 def make_beep(rate: int = TTS_RATE, freq: float = 660.0, ms: int = 120) -> bytes:
     n = int(rate * ms / 1000)
     amp = 0.05
@@ -473,6 +819,8 @@ class Agent:
 
     def __init__(self, token: str) -> None:
         self.token = token
+        self.tz = None
+        self._tz_name = ALARM_TZ_NAME or None
         self.feat = OpenWakeWordFeatures.from_builtin()
         self.ww = OpenWakeWord.from_builtin(Model.OKAY_NABU)
         wake_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "wake_word.wav")
@@ -530,6 +878,47 @@ class Agent:
         self.pipeline_id: str | None = None
         self.play_lock = asyncio.Lock()
         self.announce_lock = asyncio.Lock()
+        self.timers: dict[str, dict] = {}
+        self.timer_tasks: dict[str, asyncio.Task] = {}
+        self.timer_lock = asyncio.Lock()
+        try:
+            self.timer_chime = load_sound_48k(TIMER_SOUND)
+            log.info(
+                "timer sound: %.2fs",
+                max(0.0, (len(self.timer_chime) - 44) / 4 / TTS_RATE),
+            )
+        except Exception as exc:  # noqa: BLE001
+            log.warning("timer sound load failed (%s); using beep", exc)
+            self.timer_chime = make_beep(freq=880, ms=300)
+        try:
+            self.alarm_sound = load_sound_48k(ALARM_SOUND)
+            log.info(
+                "alarm sound: %.2fs",
+                max(0.0, (len(self.alarm_sound) - 44) / 4 / TTS_RATE),
+            )
+        except Exception as exc:  # noqa: BLE001
+            log.warning("alarm sound load failed (%s); using beep", exc)
+            self.alarm_sound = self.timer_chime
+        self.alarms: dict[str, dict] = {}
+        self.alarm_tasks: dict[str, asyncio.Task] = {}
+        self.alarm_lock = asyncio.Lock()
+        self.alarm_media_uri: str | None = None
+        self.alarm_media_type: str = "music"
+        self.alarm_media_name: str = ""
+        self.alarm_active = False
+        self.alarm_current_label = ""
+        self.alarm_prev_volume: int | None = None
+        self.alarm_level = ALARM_START_LEVEL
+        self.alarm_duck_until = 0.0
+        self.alarm_stt_queue: asyncio.Queue[bytes] = asyncio.Queue(maxsize=3)
+        self.alarm_stt_task: asyncio.Task | None = None
+        self.alarm_stop = asyncio.Event()
+        self.night_active = False
+        self.night_exit = NIGHT_DEFAULT_EXIT
+        self.night_prev_volume: int | None = None
+        self.night_task: asyncio.Task | None = None
+        self.alarm_play_task: asyncio.Task | None = None
+        self.alarm_ramp_task: asyncio.Task | None = None
         self.session: aiohttp.ClientSession | None = None
         self.tasks: set[asyncio.Task] = set()
         self._tts_gain_cache = TTS_GAIN
@@ -538,19 +927,65 @@ class Agent:
 
     async def start(self) -> None:
         self.session = aiohttp.ClientSession()
+        self.tz = await self._load_timezone()
         self.pipeline_id = await self._discover_pipeline()
         log.info("pipeline: %s", self.pipeline_id)
         await self._send_led("off")
+        self._load_timers()
+        self._load_alarms()
+        self._load_alarm_media()
+        self._load_night()
         self._spawn(self._button_loop())
         self._spawn(self._apply_station_volume())
         self._spawn(self._music_volume_guard())
         self._spawn(self._state_watchdog())
 
     async def close(self) -> None:
+        for task in self.timer_tasks.values():
+            task.cancel()
+        self.timer_tasks.clear()
+        for task in self.alarm_tasks.values():
+            task.cancel()
+        self.alarm_tasks.clear()
+        self.alarm_stop.set()
+        if self.night_task and not self.night_task.done():
+            self.night_task.cancel()
+        self.night_task = None
         if self.session:
             await self.session.close()
 
     # ---------------------------------------------------------------- HA API
+    async def _load_timezone(self):
+        """Use the timezone configured in Home Assistant for alarms.
+
+        The box may run in a different zone than HA (the station is MSK while
+        this host is Asia/Krasnoyarsk), so never trust the OS local time here.
+        """
+        assert self.session
+        name = self._tz_name
+        if not name:
+            for attempt in range(5):
+                try:
+                    async with self.session.get(
+                        f"{HA_HTTP}/api/config",
+                        headers={"Authorization": f"Bearer {self.token}"},
+                        timeout=5,
+                    ) as resp:
+                        if resp.status == 200:
+                            name = (await resp.json()).get("time_zone") or ""
+                            if name:
+                                break
+                except Exception as exc:  # noqa: BLE001
+                    log.warning(
+                        "HA config timezone read failed (attempt %d/5): %s",
+                        attempt + 1,
+                        exc,
+                    )
+                await asyncio.sleep(2)
+        tz = resolve_timezone(name)
+        log.info("alarm timezone: %s", name or getattr(tz, "tzname", None))
+        return tz
+
     async def _ha_call(self, domain: str, service: str, data: dict) -> bool:
         """Call a Home Assistant service; return True on a 2xx response."""
         assert self.session
@@ -669,6 +1104,31 @@ class Agent:
     def _music_stop_requested(text: str) -> bool:
         low = (text or "").lower()
         return any(word in low for word in MUSIC_STOP_WORDS)
+
+    @staticmethod
+    def _alarm_stop_requested(text: str) -> bool:
+        low = re.sub(r"[^0-9a-zа-яё ]+", " ", (text or "").lower().replace("ё", "е"))
+        words = low.split()
+        if not words:
+            return False
+        # "Стоп" is decisive even when STT glued it to a longer TV phrase.
+        if "стоп" in words or "stop" in words:
+            return True
+        if len(words) > 4:
+            return False
+        if "тихо" in words:
+            return True
+        if any(
+            word.startswith(("хватит", "замолчи", "довольно", "перестань"))
+            for word in words
+        ):
+            return True
+        if any(
+            word.startswith(("выключ", "отключ", "останов", "прекрат"))
+            for word in words
+        ):
+            return any(word.startswith("будильник") for word in words) or len(words) <= 2
+        return False
 
     async def _wake_feedback(self) -> None:
         loop = asyncio.get_running_loop()
@@ -816,7 +1276,7 @@ class Agent:
             await self._debian_volume({"level": level})
             log.info("wake duck: restored %d%%", level)
 
-    async def _set_station_volume(self, percent: int) -> int | None:
+    async def _set_station_volume(self, percent: int, save: bool = True) -> int | None:
         """Set station volume on Debian (8098) or Android (8096)."""
         percent = min(100, max(0, percent))
         value = await self._debian_volume({"level": percent})
@@ -828,7 +1288,8 @@ class Agent:
                     return None
                 # The daemon acknowledged but did not report a level.
                 value = percent
-        self._save_station_volume(value)
+        if save:
+            self._save_station_volume(value)
         self._reset_tts_gain_cache()
         return value
 
@@ -844,10 +1305,29 @@ class Agent:
         return value
 
     async def _apply_station_volume(self) -> None:
-        """Restore the station volume after boot/service restart."""
-        percent = self._saved_station_volume()
+        """Keep the station's current volume after a voice-service restart.
+
+        The physical dial and the station volume service own the real level.
+        The saved file is only a fallback for when the station is unreachable,
+        otherwise an old value would clobber a dial change.
+        """
         for _ in range(30):
-            value = await self._set_station_volume(percent)
+            current = await self._debian_volume_level()
+            if current is not None:
+                if self.night_active:
+                    if current != NIGHT_VOLUME:
+                        await self._set_station_volume(NIGHT_VOLUME, save=False)
+                        log.info("station volume set to night %d%%", NIGHT_VOLUME)
+                    else:
+                        log.info("station volume already at night %d%%", current)
+                    return
+                self._save_station_volume(current)
+                log.info("station volume kept at %d%%", current)
+                return
+            await asyncio.sleep(2)
+        percent = NIGHT_VOLUME if self.night_active else self._saved_station_volume()
+        for _ in range(30):
+            value = await self._set_station_volume(percent, save=False)
             if value is not None:
                 log.info("station volume set to %d%%", value)
                 return
@@ -1012,7 +1492,7 @@ class Agent:
             return "Включаю трансляцию экрана станции."
         return "Выключаю трансляцию."
 
-    async def _run_pipeline(self, pcm: bytes) -> tuple[str, str]:
+    async def _run_pipeline(self, pcm: bytes, stt_only: bool = False) -> tuple[str, str]:
         """Send utterance to Assist, return (user_text, reply_text)."""
         assert self.session
         handler_id = None
@@ -1029,7 +1509,7 @@ class Agent:
                     "id": 2,
                     "type": "assist_pipeline/run",
                     "start_stage": "stt",
-                    "end_stage": "intent",
+                    "end_stage": "stt" if stt_only else "intent",
                     "pipeline": self.pipeline_id,
                     "input": {"sample_rate": RATE},
                 }
@@ -1074,6 +1554,9 @@ class Agent:
                         return user_text, ""
                     if is_junk_stt(user_text):
                         log.info("ignoring hallucinated STT: %r", user_text)
+                        await ws.close()
+                        return user_text, ""
+                    if stt_only:
                         await ws.close()
                         return user_text, ""
                     local_reply = await self._volume_command(user_text)
@@ -1261,6 +1744,54 @@ class Agent:
         except Exception:  # noqa: BLE001 - never kill the stream
             log.exception("wake processing failed")
 
+    def _handle_alarm_wake(self, mono: np.ndarray) -> None:
+        """Let 'Okay Nabu' interrupt a ringing alarm.
+
+        The alarm keeps the normal state machine in ``listen``.  Detecting the
+        wake word here ducks the alarm for a few seconds so the follow-up
+        command (usually "стоп") is heard over the speaker.
+        """
+        try:
+            now = asyncio.get_running_loop().time()
+            if now < self.alarm_duck_until:
+                return
+            score = self._scores(mono)
+            if score >= 0.25 and now - getattr(self, "_alarm_wake_log", 0.0) > 2.0:
+                self._alarm_wake_log = now
+                log.info("alarm wake dbg score=%.3f", score)
+            if score < ALARM_WAKE_THRESHOLD:
+                if score < ALARM_WAKE_THRESHOLD * 0.6:
+                    self.wake_hits = 0
+                return
+            if now - self.last_detect < 2.0:
+                return
+            if now - self.wake_first_hit > WAKE_HIT_WINDOW:
+                self.wake_hits = 0
+            if self.wake_hits == 0:
+                self.wake_first_hit = now
+            self.wake_hits += 1
+            if score < 0.6 and self.wake_hits < ALARM_WAKE_HITS:
+                log.info("alarm wake candidate %.3f", score)
+                return
+            self.wake_hits = 0
+            self.last_detect = now
+            self.ww.reset()
+            self.feat.reset()
+            log.info("alarm wake word (score %.3f); ducking to listen", score)
+            current = self.current_task
+            if current and not current.done():
+                current.cancel()
+            self.current_task = None
+            self.state = "listen"
+            # Keep the buffered wake phrase: if the user says "Окей Набу, стоп"
+            # in one breath, STT must still see the "стоп" part.
+            self._reset_listen_vad()
+            self.mute_until = now + 0.05
+            self._spawn(self._send_led("wake"))
+            self._spawn(self._alarm_duck(ALARM_DUCK_SECONDS))
+        except Exception:  # noqa: BLE001 - never kill the stream
+            log.exception("alarm wake processing failed")
+
     def _spawn(self, coro) -> None:
         task = asyncio.create_task(coro)
         self.tasks.add(task)
@@ -1276,7 +1807,9 @@ class Agent:
         """
         hist = self.wake_rms_hist[-38:]
         baseline = float(np.percentile(hist, 10)) if hist else VAD_RMS
-        self.noise_rms = max(float(VAD_RMS), baseline)
+        # During an alarm the speaker is loud; require a stronger voice peak.
+        floor = max(float(VAD_RMS), 400.0) if self.alarm_active else float(VAD_RMS)
+        self.noise_rms = max(floor, baseline)
         self.speech_peak = 0.0
         self.silence_ms = 0
         self.heard_speech = False
@@ -1346,6 +1879,10 @@ class Agent:
             await asyncio.sleep(0.15)
 
     def _on_button(self) -> None:
+        if self.alarm_active:
+            log.info("button: stop alarm")
+            self._spawn(self.stop_alarm())
+            return
         if self.state == "process":
             self._barge_in(1.0)
             return
@@ -1437,6 +1974,922 @@ class Agent:
                 self.preroll.clear()
         return True
 
+    # --------------------------------------------------------------- timers
+    def _timer_text(self) -> str:
+        if not self.timers:
+            return "Таймеров нет."
+        now = time.time()
+        items = sorted(self.timers.values(), key=lambda t: t["ends_at"])
+        parts = [
+            f"{item['name']} — {format_remaining(int(item['ends_at'] - now))}"
+            for item in items
+        ]
+        return "Таймеры: " + "; ".join(parts) + "."
+
+    def _save_timers(self) -> None:
+        try:
+            tmp = TIMER_FILE + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as fh:
+                json.dump(list(self.timers.values()), fh, ensure_ascii=False)
+            os.replace(tmp, TIMER_FILE)
+        except Exception as exc:  # noqa: BLE001
+            log.debug("timer save: %s", exc)
+
+    def _load_timers(self) -> None:
+        try:
+            with open(TIMER_FILE, encoding="utf-8") as fh:
+                items = json.load(fh)
+        except FileNotFoundError:
+            return
+        except Exception as exc:  # noqa: BLE001
+            log.warning("timer load: %s", exc)
+            return
+        now = time.time()
+        for item in items:
+            try:
+                tid = str(item["id"])
+                ends_at = float(item["ends_at"])
+                name = str(item.get("name") or "Таймер")
+            except Exception:  # noqa: BLE001
+                continue
+            if ends_at <= now:
+                continue
+            self.timers[tid] = {
+                "id": tid,
+                "name": name,
+                "duration": int(item.get("duration", 0)),
+                "ends_at": ends_at,
+            }
+            self._schedule_timer(tid)
+        if self.timers:
+            log.info("timers restored: %d", len(self.timers))
+
+    def _schedule_timer(self, tid: str) -> None:
+        old = self.timer_tasks.get(tid)
+        if old and not old.done():
+            old.cancel()
+        task = asyncio.create_task(self._run_timer(tid))
+        self.timer_tasks[tid] = task
+        task.add_done_callback(lambda _t, tid=tid: self.timer_tasks.pop(tid, None))
+
+    async def _run_timer(self, tid: str) -> None:
+        timer = self.timers.get(tid)
+        if not timer:
+            return
+        delay = max(0.0, timer["ends_at"] - time.time())
+        try:
+            await asyncio.sleep(delay)
+        except asyncio.CancelledError:
+            return
+        timer = self.timers.pop(tid, None)
+        if not timer:
+            return
+        self._save_timers()
+        await self._timer_finished(timer)
+        await self._update_timer_helper()
+
+    async def _timer_finished(self, timer: dict) -> None:
+        name = str(timer.get("name") or "Таймер")
+        log.info("timer finished: %s", name)
+        try:
+            await self._send_led("speak")
+            await self._send_wav(self.timer_chime, tail=0.1)
+            if name.startswith("Таймер"):
+                text = "Таймер закончился."
+            else:
+                text = f"Таймер {name} закончился."
+            wav = await self._synth_sentence(text, await self._tts_gain())
+            await self._send_wav(wav, tail=0.25)
+        except Exception:  # noqa: BLE001
+            log.exception("timer announcement failed")
+        finally:
+            await self._send_led("off")
+
+    async def _update_timer_helper(self) -> None:
+        await self._ha_call(
+            "input_text",
+            "set_value",
+            {
+                "entity_id": "input_text.nabustation_timers_status",
+                "value": self._timer_text(),
+            },
+        )
+
+    @staticmethod
+    def _split_timer_text(text: str) -> tuple[str, str]:
+        """Extract a name from "пасту 2 минуты" when the intent kept it in duration."""
+        text = (text or "").strip()
+        match = re.match(r"^([^\d]+?)\s+(\d.*)$", text)
+        if not match:
+            return "", text
+        candidate = re.sub(r"^(на|для|про)\s+", "", match.group(1).strip().lower())
+        candidate = re.sub(r"\s+(на|через|за)$", "", candidate)
+        if not candidate or candidate in {
+            "минут",
+            "минуты",
+            "минуту",
+            "мин",
+            "час",
+            "часа",
+            "часов",
+            "секунд",
+            "секунды",
+            "секунду",
+            "сек",
+        }:
+            return "", text
+        return candidate, match.group(2)
+
+    def _find_timer(self, name: str) -> dict | None:
+        if not self.timers:
+            return None
+        needle = (name or "").strip().lower()
+        needle = re.sub(r"^(на|для|про)\s+", "", needle)
+        if not needle:
+            return min(self.timers.values(), key=lambda t: t["ends_at"])
+        for item in self.timers.values():
+            if item["id"] == needle or item["name"].lower() == needle:
+                return item
+        for item in self.timers.values():
+            if needle in item["name"].lower():
+                return item
+        if needle.isdigit():
+            items = sorted(self.timers.values(), key=lambda t: t["ends_at"])
+            index = int(needle) - 1
+            if 0 <= index < len(items):
+                return items[index]
+        return None
+
+    async def start_timer(self, name: str, duration_text: str) -> dict:
+        if not (name or "").strip():
+            name, duration_text = self._split_timer_text(duration_text)
+        seconds = parse_duration(duration_text)
+        if not seconds or seconds <= 0:
+            return {"ok": False, "text": "Не понял длительность таймера."}
+        async with self.timer_lock:
+            name = (name or "").strip()
+            if not name:
+                name = f"Таймер {len(self.timers) + 1}"
+            tid = uuid.uuid4().hex[:8]
+            timer = {
+                "id": tid,
+                "name": name,
+                "duration": seconds,
+                "ends_at": time.time() + seconds,
+            }
+            self.timers[tid] = timer
+            self._save_timers()
+            self._schedule_timer(tid)
+            await self._update_timer_helper()
+            return {
+                "ok": True,
+                "id": tid,
+                "name": name,
+                "seconds": seconds,
+                "text": f"Таймер на {format_remaining(seconds)} поставлен.",
+            }
+
+    async def list_timers(self) -> dict:
+        async with self.timer_lock:
+            text = self._timer_text()
+            await self._update_timer_helper()
+            return {"ok": True, "count": len(self.timers), "text": text}
+
+    async def cancel_timer(self, name: str) -> dict:
+        async with self.timer_lock:
+            timer = self._find_timer(name)
+            if not timer:
+                return {"ok": False, "text": "Таймер не найден."}
+            tid = timer["id"]
+            self.timers.pop(tid, None)
+            task = self.timer_tasks.pop(tid, None)
+            if task:
+                task.cancel()
+            self._save_timers()
+            await self._update_timer_helper()
+            return {"ok": True, "text": f"Таймер {timer['name']} отменён."}
+
+    async def cancel_all_timers(self) -> dict:
+        async with self.timer_lock:
+            count = len(self.timers)
+            for task in self.timer_tasks.values():
+                task.cancel()
+            self.timer_tasks.clear()
+            self.timers.clear()
+            self._save_timers()
+            await self._update_timer_helper()
+            return {"ok": True, "count": count, "text": "Все таймеры отменены."}
+
+    async def extend_timer(self, name: str, duration_text: str) -> dict:
+        if not (name or "").strip():
+            name, duration_text = self._split_timer_text(duration_text)
+        seconds = parse_duration(duration_text)
+        if not seconds or seconds <= 0:
+            return {"ok": False, "text": "Не понял, на сколько продлить."}
+        async with self.timer_lock:
+            timer = self._find_timer(name)
+            if not timer:
+                return {"ok": False, "text": "Таймер не найден."}
+            timer["ends_at"] += seconds
+            self._save_timers()
+            self._schedule_timer(timer["id"])
+            await self._update_timer_helper()
+            return {
+                "ok": True,
+                "text": f"Таймер {timer['name']} продлён на {format_remaining(seconds)}.",
+            }
+
+    async def timer_action(self, action: str, name: str, duration: str) -> dict:
+        if action == "start":
+            return await self.start_timer(name, duration)
+        if action == "list":
+            return await self.list_timers()
+        if action == "cancel":
+            return await self.cancel_timer(name)
+        if action == "cancel_all":
+            return await self.cancel_all_timers()
+        if action == "extend":
+            return await self.extend_timer(name, duration)
+        return {"ok": False, "text": "Неизвестное действие таймера."}
+
+    # --------------------------------------------------------------- alarms
+    def _alarm_display(self, alarm: dict, at: float) -> str:
+        dt = datetime.fromtimestamp(at, self.tz)
+        weekdays = sorted(alarm.get("weekdays") or [])
+        if weekdays:
+            if weekdays == list(range(5)):
+                desc = "по будням"
+            elif weekdays == [5, 6]:
+                desc = "по выходным"
+            elif weekdays == list(range(7)):
+                desc = "каждый день"
+            else:
+                names = [_WEEKDAY_DATIVE[index] for index in weekdays]
+                desc = "по " + ", ".join(names[:-1]) + " и " + names[-1] if len(names) > 1 else "по " + names[0]
+            return f"{desc} в {dt:%H:%M}"
+        today = datetime.now(self.tz).date()
+        if dt.date() == today:
+            return f"сегодня в {dt:%H:%M}"
+        if dt.date() == today + timedelta(days=1):
+            return f"завтра в {dt:%H:%M}"
+        return f"{dt.day} {_MONTHS_RU[dt.month - 1]} в {dt:%H:%M}"
+
+    def _alarm_text(self) -> str:
+        if self.alarm_active:
+            label = self.alarm_current_label or "будильник"
+            return f"Будильник звонит: {label}."
+        if not self.alarms:
+            return "Будильников нет."
+        now = time.time()
+        parts = []
+        for alarm in sorted(
+            self.alarms.values(), key=lambda a: self._next_alarm_at(a, now) or 0
+        ):
+            at = self._next_alarm_at(alarm, now)
+            if at is None:
+                continue
+            parts.append(self._alarm_display(alarm, at))
+        return "Будильники: " + "; ".join(parts) + "." if parts else "Будильников нет."
+
+    def _save_alarms(self) -> None:
+        try:
+            tmp = ALARM_FILE + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as fh:
+                json.dump(list(self.alarms.values()), fh, ensure_ascii=False)
+            os.replace(tmp, ALARM_FILE)
+        except Exception as exc:  # noqa: BLE001
+            log.debug("alarm save: %s", exc)
+
+    def _load_alarms(self) -> None:
+        try:
+            with open(ALARM_FILE, encoding="utf-8") as fh:
+                items = json.load(fh)
+        except FileNotFoundError:
+            return
+        except Exception as exc:  # noqa: BLE001
+            log.warning("alarm load: %s", exc)
+            return
+        now = time.time()
+        for item in items:
+            try:
+                aid = str(item["id"])
+                alarm = {
+                    "id": aid,
+                    "label": str(item.get("label") or ""),
+                    "raw": str(item.get("raw") or item.get("label") or ""),
+                    "at": float(item["at"]) if item.get("at") else None,
+                    "time": str(item.get("time") or ""),
+                    "weekdays": list(item.get("weekdays") or []),
+                }
+            except Exception:  # noqa: BLE001
+                continue
+            if alarm["at"] and alarm["at"] <= now and not alarm["weekdays"]:
+                continue
+            self.alarms[aid] = alarm
+            self._schedule_alarm(aid)
+        if self.alarms:
+            log.info("alarms restored: %d", len(self.alarms))
+
+    def _load_alarm_media(self) -> None:
+        try:
+            data = json.loads(open(ALARM_MEDIA_FILE, encoding="utf-8").read())
+        except FileNotFoundError:
+            return
+        except Exception as exc:  # noqa: BLE001
+            log.warning("alarm media load: %s", exc)
+            return
+        self.alarm_media_uri = data.get("uri") or None
+        self.alarm_media_type = str(data.get("type") or "music")
+        self.alarm_media_name = str(data.get("name") or "")
+        if self.alarm_media_uri:
+            log.info("alarm media: %s", self.alarm_media_name or self.alarm_media_uri)
+
+    def _save_alarm_media(self) -> None:
+        try:
+            tmp = ALARM_MEDIA_FILE + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as fh:
+                json.dump(
+                    {
+                        "uri": self.alarm_media_uri,
+                        "type": self.alarm_media_type,
+                        "name": self.alarm_media_name,
+                    },
+                    fh,
+                    ensure_ascii=False,
+                )
+            os.replace(tmp, ALARM_MEDIA_FILE)
+        except Exception as exc:  # noqa: BLE001
+            log.debug("alarm media save: %s", exc)
+
+    def _next_alarm_at(self, alarm: dict, now: float | None = None) -> float | None:
+        now = time.time() if now is None else now
+        weekdays = alarm.get("weekdays") or []
+        time_str = alarm.get("time") or ""
+        if not weekdays and alarm.get("at"):
+            return float(alarm["at"]) if float(alarm["at"]) > now else None
+        if not weekdays or not time_str:
+            return None
+        try:
+            hour, minute = (int(x) for x in time_str.split(":", 1))
+        except ValueError:
+            return None
+        base = datetime.fromtimestamp(now, self.tz)
+        for offset in range(8):
+            day = base.date() + timedelta(days=offset)
+            if day.weekday() not in weekdays:
+                continue
+            candidate = datetime.combine(
+                day, datetime.min.time(), tzinfo=base.tzinfo
+            ).replace(hour=hour, minute=minute)
+            if candidate.timestamp() > now:
+                return candidate.timestamp()
+        return None
+
+    def _schedule_alarm(self, aid: str) -> None:
+        old = self.alarm_tasks.get(aid)
+        # A repeating alarm reschedules itself from inside its own task; never
+        # cancel the running task, just replace the mapping with the new one.
+        if old and not old.done() and old is not asyncio.current_task():
+            old.cancel()
+        alarm = self.alarms.get(aid)
+        if not alarm:
+            return
+        at = self._next_alarm_at(alarm)
+        if at is None:
+            return
+        task = asyncio.create_task(self._run_alarm(aid, at))
+        self.alarm_tasks[aid] = task
+        task.add_done_callback(
+            lambda t, aid=aid: (
+                self.alarm_tasks.pop(aid, None)
+                if self.alarm_tasks.get(aid) is t
+                else None
+            )
+        )
+
+    async def _run_alarm(self, aid: str, at: float) -> None:
+        try:
+            await asyncio.sleep(max(0.0, at - time.time()))
+        except asyncio.CancelledError:
+            return
+        alarm = self.alarms.get(aid)
+        if not alarm:
+            return
+        await self._fire_alarm(alarm)
+        if alarm.get("weekdays"):
+            self._schedule_alarm(aid)
+        else:
+            self.alarms.pop(aid, None)
+        self._save_alarms()
+        await self._update_alarm_helper()
+
+    async def _alarm_play_loop(self) -> None:
+        while not self.alarm_stop.is_set():
+            await self._send_wav(self.alarm_sound, tail=0.05)
+
+    async def _alarm_ramp(self) -> None:
+        loop = asyncio.get_running_loop()
+        started = loop.time()
+        steps = max(1, ALARM_RAMP_SECONDS // 10)
+        step = 0
+        while not self.alarm_stop.is_set():
+            elapsed = loop.time() - started
+            if elapsed >= ALARM_RAMP_SECONDS:
+                return
+            if loop.time() < self.alarm_duck_until:
+                await asyncio.sleep(0.5)
+                continue
+            target = min(steps, int(elapsed // 10))
+            if target > step:
+                step = target
+                level = ALARM_START_LEVEL + (
+                    (ALARM_MAX_LEVEL - ALARM_START_LEVEL) * step // steps
+                )
+                self.alarm_level = level
+                await self._set_station_volume(level, save=False)
+            await asyncio.sleep(0.5)
+
+    async def _alarm_duck(self, seconds: float) -> None:
+        """Lower the alarm briefly so the user's command can be heard."""
+        if not self.alarm_active:
+            return
+        loop = asyncio.get_running_loop()
+        self.alarm_duck_until = loop.time() + seconds
+        await self._set_station_volume(ALARM_DUCK_LEVEL, save=False)
+        await asyncio.sleep(seconds)
+        if self.alarm_active:
+            await self._set_station_volume(self.alarm_level, save=False)
+
+    async def _fire_alarm(self, alarm: dict) -> None:
+        self.alarm_active = True
+        self.alarm_current_label = self._alarm_display(
+            alarm, float(alarm.get("at") or time.time())
+        )
+        self.alarm_stop.clear()
+        self.alarm_level = ALARM_START_LEVEL
+        self.alarm_duck_until = 0.0
+        current = self.current_task
+        if current and not current.done():
+            current.cancel()
+        self.current_task = None
+        self.state = "listen"
+        self.utterance = bytearray()
+        self._reset_listen_vad()
+        self.ww.reset()
+        self.feat.reset()
+        self.mute_until = 0.0
+        log.info("alarm fired: %s", alarm.get("label") or alarm.get("time"))
+        while not self.alarm_stt_queue.empty():
+            try:
+                self.alarm_stt_queue.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+        self.alarm_stt_task = asyncio.create_task(self._alarm_stt_worker())
+        previous = await self._debian_volume_level()
+        if previous is None:
+            previous = self._saved_station_volume()
+        if self.night_active:
+            previous = NIGHT_VOLUME
+        self.alarm_prev_volume = previous
+        log.info("alarm volume: %d%% -> %d%%", previous, ALARM_START_LEVEL)
+        await self._set_station_volume(ALARM_START_LEVEL, save=False)
+        await self._send_led("sunrise")
+        media_played = False
+        if self.alarm_media_uri:
+            media_played = await self._ha_call(
+                "media_player",
+                "play_media",
+                {
+                    "entity_id": MUSIC_ENTITY,
+                    "media_content_id": self.alarm_media_uri,
+                    "media_content_type": self.alarm_media_type,
+                    "enqueue": "replace",
+                },
+            )
+            if media_played:
+                log.info("alarm media playing: %s", self.alarm_media_name)
+        if not media_played:
+            self.alarm_play_task = asyncio.create_task(self._alarm_play_loop())
+        else:
+            self.alarm_play_task = None
+        self.alarm_ramp_task = asyncio.create_task(self._alarm_ramp())
+        await self._update_alarm_helper("Будильник звонит.")
+        try:
+            await self.alarm_stop.wait()
+        finally:
+            for task in (self.alarm_play_task, self.alarm_ramp_task):
+                if task and not task.done():
+                    task.cancel()
+            self.alarm_play_task = None
+            self.alarm_ramp_task = None
+            if self.alarm_stt_task and not self.alarm_stt_task.done():
+                self.alarm_stt_task.cancel()
+            self.alarm_stt_task = None
+            while not self.alarm_stt_queue.empty():
+                try:
+                    self.alarm_stt_queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    break
+            if media_played:
+                await self._ha_call(
+                    "media_player", "media_pause", {"entity_id": MUSIC_ENTITY}
+                )
+            await self._send_led("stop")
+            restore = self.alarm_prev_volume
+            self.alarm_prev_volume = None
+            if restore is None:
+                restore = ALARM_START_LEVEL
+            log.info("alarm restore volume: %d%%", restore)
+            await self._set_station_volume(restore)
+            await self._send_led("off")
+            self.alarm_active = False
+            self.alarm_current_label = ""
+            self.state = "wake"
+            self.utterance = bytearray()
+            self._reset_listen_vad()
+            self.ww.reset()
+            self.feat.reset()
+            log.info("alarm stopped")
+
+    def _next_alarm_text(self) -> str:
+        if self.alarm_active:
+            return "Будильник звонит."
+        if not self.alarms:
+            return "Будильников нет."
+        now = time.time()
+        best_alarm = None
+        best_at = None
+        for alarm in self.alarms.values():
+            at = self._next_alarm_at(alarm, now)
+            if at is None:
+                continue
+            if best_at is None or at < best_at:
+                best_alarm, best_at = alarm, at
+        if not best_alarm or best_at is None:
+            return "Будильников нет."
+        return "Ближайший будильник: " + self._alarm_display(best_alarm, best_at) + "."
+
+    async def _update_alarm_helper(self, text: str | None = None) -> None:
+        await self._ha_call(
+            "input_text",
+            "set_value",
+            {
+                "entity_id": "input_text.nabustation_alarms_status",
+                "value": text or self._alarm_text(),
+            },
+        )
+        await self._ha_call(
+            "input_text",
+            "set_value",
+            {
+                "entity_id": "input_text.nabustation_next_alarm",
+                "value": self._next_alarm_text(),
+            },
+        )
+
+    def _find_alarm(self, query: str) -> dict | None:
+        if not self.alarms:
+            return None
+        needle = (query or "").strip().lower()
+        if not needle:
+            return min(
+                self.alarms.values(),
+                key=lambda a: self._next_alarm_at(a) or float("inf"),
+            )
+        for alarm in self.alarms.values():
+            if alarm["id"] == needle:
+                return alarm
+        for alarm in self.alarms.values():
+            label = (alarm.get("label") or "").lower()
+            raw = (alarm.get("raw") or "").lower()
+            when = (alarm.get("time") or "").lower()
+            if needle in label or needle in raw or needle in when:
+                return alarm
+        return None
+
+    async def set_alarm(self, text: str) -> dict:
+        parsed = parse_alarm_text(text, tz=self.tz)
+        if not parsed:
+            return {"ok": False, "text": "Не понял дату и время будильника."}
+        async with self.alarm_lock:
+            aid = uuid.uuid4().hex[:8]
+            self.alarms[aid] = {
+                "id": aid,
+                "label": parsed["label"],
+                "raw": text,
+                "at": parsed["at"],
+                "time": parsed["time"],
+                "weekdays": parsed["weekdays"],
+            }
+            self._save_alarms()
+            self._schedule_alarm(aid)
+            await self._update_alarm_helper()
+            when = datetime.fromtimestamp(parsed["at"], self.tz).strftime(
+                "%d.%m %H:%M"
+            )
+            return {
+                "ok": True,
+                "id": aid,
+                "at": parsed["at"],
+                "text": f"Будильник на {when} поставлен.",
+            }
+
+    async def set_alarm_media(self, query: str) -> dict:
+        query = (query or "").strip()
+        if not query:
+            return {"ok": False, "text": "Не понял название песни."}
+        assert self.session
+        try:
+            async with self.session.post(
+                f"{HA_HTTP}/api/services/media_player/search_media?return_response",
+                json={
+                    "entity_id": MUSIC_ENTITY,
+                    "search_query": query,
+                    "media_content_type": "music",
+                },
+                headers={"Authorization": f"Bearer {self.token}"},
+                timeout=20,
+            ) as resp:
+                if resp.status != 200:
+                    return {"ok": False, "text": "Поиск песни не удался."}
+                data = await resp.json()
+        except Exception as exc:  # noqa: BLE001
+            log.warning("alarm media search: %s", exc)
+            return {"ok": False, "text": "Поиск песни не удался."}
+        result = (
+            (data.get("service_response") or {})
+            .get(MUSIC_ENTITY, {})
+            .get("result")
+            or []
+        )
+        track = next(
+            (item for item in result if item.get("media_class") == "track"), None
+        )
+        if not track or not track.get("media_content_id"):
+            return {"ok": False, "text": "Не нашёл такую песню."}
+        self.alarm_media_uri = str(track["media_content_id"])
+        self.alarm_media_type = str(track.get("media_content_type") or "music")
+        self.alarm_media_name = str(track.get("title") or query)
+        self._save_alarm_media()
+        await self._update_alarm_helper(
+            f"На будильник поставлена песня: {self.alarm_media_name}."
+        )
+        return {
+            "ok": True,
+            "text": f"На будильник поставлена песня: {self.alarm_media_name}.",
+            "name": self.alarm_media_name,
+        }
+
+    async def clear_alarm_media(self) -> dict:
+        self.alarm_media_uri = None
+        self.alarm_media_name = ""
+        self._save_alarm_media()
+        await self._update_alarm_helper("Стандартный звук будильника.")
+        return {"ok": True, "text": "Вернул стандартный звук будильника."}
+
+    async def list_alarms(self) -> dict:
+        async with self.alarm_lock:
+            text = self._alarm_text()
+            await self._update_alarm_helper(text)
+            return {"ok": True, "count": len(self.alarms), "text": text}
+
+    async def cancel_alarm(self, query: str) -> dict:
+        async with self.alarm_lock:
+            alarm = self._find_alarm(query)
+            if not alarm:
+                return {"ok": False, "text": "Будильник не найден."}
+            aid = alarm["id"]
+            self.alarms.pop(aid, None)
+            task = self.alarm_tasks.pop(aid, None)
+            if task:
+                task.cancel()
+            self._save_alarms()
+            await self._update_alarm_helper()
+            return {"ok": True, "text": "Будильник отменён."}
+
+    async def cancel_all_alarms(self) -> dict:
+        async with self.alarm_lock:
+            count = len(self.alarms)
+            for task in self.alarm_tasks.values():
+                task.cancel()
+            self.alarm_tasks.clear()
+            self.alarms.clear()
+            self._save_alarms()
+            await self._update_alarm_helper()
+            return {"ok": True, "count": count, "text": "Все будильники отменены."}
+
+    async def snooze_alarm(self, minutes: int) -> dict:
+        if not self.alarm_active:
+            return {"ok": False, "text": "Будильник не звонит."}
+        minutes = max(1, min(60, int(minutes)))
+        at = time.time() + minutes * 60
+        label = f"Отложенный будильник на {format_minutes(minutes)}"
+        async with self.alarm_lock:
+            aid = uuid.uuid4().hex[:8]
+            self.alarms[aid] = {
+                "id": aid,
+                "label": label,
+                "raw": f"ещё {minutes} минут",
+                "at": at,
+                "time": datetime.fromtimestamp(at, self.tz).strftime("%H:%M"),
+                "weekdays": [],
+            }
+            self._save_alarms()
+            self._schedule_alarm(aid)
+        self.alarm_stop.set()
+        await self._update_alarm_helper()
+        return {
+            "ok": True,
+            "text": f"Отложил будильник на {format_minutes(minutes)}.",
+        }
+
+    async def stop_alarm(self) -> dict:
+        if not self.alarm_active:
+            return {"ok": False, "text": "Будильник не звонит."}
+        self.alarm_stop.set()
+        return {"ok": True, "text": "Будильник выключен."}
+
+    async def alarm_action(self, action: str, text: str) -> dict:
+        if action == "set":
+            return await self.set_alarm(text)
+        if action == "set_media":
+            return await self.set_alarm_media(text)
+        if action == "clear_media":
+            return await self.clear_alarm_media()
+        if action == "list":
+            return await self.list_alarms()
+        if action == "cancel":
+            return await self.cancel_alarm(text)
+        if action == "cancel_all":
+            return await self.cancel_all_alarms()
+        if action == "stop":
+            return await self.stop_alarm()
+        if action == "snooze":
+            minutes = parse_snooze_text(text) or 5
+            return await self.snooze_alarm(minutes)
+        return {"ok": False, "text": "Неизвестное действие будильника."}
+
+    # ---------------------------------------------------------------- night
+    def _load_night(self) -> None:
+        try:
+            with open(NIGHT_FILE, encoding="utf-8") as fh:
+                data = json.load(fh)
+        except FileNotFoundError:
+            return
+        except Exception as exc:  # noqa: BLE001
+            log.warning("night load: %s", exc)
+            return
+        self.night_exit = str(data.get("exit") or NIGHT_DEFAULT_EXIT)
+        prev = data.get("prev_volume")
+        self.night_prev_volume = (
+            int(prev) if isinstance(prev, (int, float)) else None
+        )
+        if data.get("active"):
+            self.night_active = True
+            self._schedule_night_exit()
+            log.info("night mode restored (exit %s)", self.night_exit)
+
+    def _save_night(self) -> None:
+        try:
+            tmp = NIGHT_FILE + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as fh:
+                json.dump(
+                    {
+                        "active": self.night_active,
+                        "exit": self.night_exit,
+                        "prev_volume": self.night_prev_volume,
+                    },
+                    fh,
+                    ensure_ascii=False,
+                )
+            os.replace(tmp, NIGHT_FILE)
+        except Exception as exc:  # noqa: BLE001
+            log.debug("night save: %s", exc)
+
+    def _night_exit_at(self) -> float | None:
+        parsed = parse_time_text(self.night_exit)
+        if not parsed:
+            return None
+        hour, minute = parsed
+        now = datetime.now(self.tz)
+        candidate = datetime.combine(
+            now.date(), datetime.min.time(), tzinfo=self.tz
+        ).replace(hour=hour, minute=minute)
+        if candidate <= now:
+            candidate += timedelta(days=1)
+        return candidate.timestamp()
+
+    def _schedule_night_exit(self) -> None:
+        if self.night_task and not self.night_task.done():
+            self.night_task.cancel()
+        self.night_task = None
+        if not self.night_active:
+            return
+        at = self._night_exit_at()
+        if at is None:
+            return
+        self.night_task = asyncio.create_task(self._run_night_exit(at))
+
+    async def _run_night_exit(self, at: float) -> None:
+        try:
+            await asyncio.sleep(max(0.0, at - time.time()))
+        except asyncio.CancelledError:
+            return
+        if not self.night_active:
+            return
+        log.info("night mode scheduled exit")
+        await self.set_night(False, auto=True)
+
+    def _night_status_text(self) -> str:
+        if self.night_active:
+            return f"Ночной режим включён. Выйду в {self.night_exit}."
+        return "Ночной режим выключен."
+
+    async def _update_night_helper(self, text: str | None = None) -> None:
+        await self._ha_call(
+            "input_text",
+            "set_value",
+            {
+                "entity_id": "input_text.nabustation_night_status",
+                "value": text or self._night_status_text(),
+            },
+        )
+
+    async def set_night(self, enabled: bool, auto: bool = False) -> dict:
+        if enabled:
+            if not self.night_active:
+                previous = await self._debian_volume_level()
+                if previous is None:
+                    previous = self._saved_station_volume()
+                self.night_prev_volume = previous
+            self.night_active = True
+            self._save_night()
+            await self._set_station_volume(NIGHT_VOLUME, save=False)
+            await self._send_led("off")
+            await self._ha_call(
+                "media_player", "media_pause", {"entity_id": MUSIC_ENTITY}
+            )
+            self._schedule_night_exit()
+            text = f"Ночной режим включён. Выйду в {self.night_exit}."
+        else:
+            was_active = self.night_active
+            self.night_active = False
+            if self.night_task and not self.night_task.done():
+                self.night_task.cancel()
+            self.night_task = None
+            previous = self.night_prev_volume
+            self.night_prev_volume = None
+            self._save_night()
+            if was_active:
+                restore = (
+                    previous
+                    if previous is not None
+                    else self._saved_station_volume()
+                )
+                await self._set_station_volume(restore, save=True)
+                await self._send_led("off")
+            text = "Ночной режим выключен."
+            if auto:
+                text = "Доброе утро. Ночной режим выключен."
+        await self._update_night_helper(text)
+        return {
+            "ok": True,
+            "active": self.night_active,
+            "exit": self.night_exit,
+            "text": text,
+        }
+
+    async def set_night_exit(self, text: str) -> dict:
+        parsed = parse_time_text(text)
+        if not parsed:
+            return {"ok": False, "text": "Не понял время выхода из ночного режима."}
+        self.night_exit = f"{parsed[0]:02d}:{parsed[1]:02d}"
+        self._save_night()
+        if self.night_active:
+            self._schedule_night_exit()
+        reply = f"Выход из ночного режима в {self.night_exit}."
+        helper = self._night_status_text() if self.night_active else reply
+        await self._update_night_helper(helper)
+        return {"ok": True, "exit": self.night_exit, "text": reply}
+
+    async def night_action(self, action: str, text: str) -> dict:
+        if action == "on":
+            return await self.set_night(True)
+        if action == "off":
+            return await self.set_night(False)
+        if action == "status":
+            text = self._night_status_text()
+            await self._update_night_helper(text)
+            return {
+                "ok": True,
+                "active": self.night_active,
+                "exit": self.night_exit,
+                "text": text,
+            }
+        if action == "set_exit":
+            return await self.set_night_exit(text)
+        return {"ok": False, "text": "Неизвестное действие ночного режима."}
+
     def feed(self, data: bytes, channels: int | None = None) -> None:
         ch = channels or CHANNELS
         mic_ch = 3 if ch >= 5 else 1
@@ -1504,6 +2957,11 @@ class Agent:
                     # Keep the music threshold through short quiet gaps.
                     self.music_hold_frames -= 1
                     music_active = True
+
+        # Alarm: the wake word must also work while a TV utterance is being
+        # transcribed, not only in the "listen" state.
+        if self.alarm_active:
+            self._handle_alarm_wake(wake_mono)
 
         # AEC barge-in: ch0-2 are microphones, ch3 is the tweeter reference.
         # While TTS plays, an STFT Wiener filter cancels the station's own
@@ -1603,23 +3061,39 @@ class Agent:
                         0.85 * self.noise_rms + 0.15 * rms,
                     )
 
-            too_long = len(self.utterance) >= MAX_UTTERANCE_MS * RATE * 2 // 1000
+            max_utterance_ms = (
+                ALARM_MAX_UTTERANCE_MS if self.alarm_active else MAX_UTTERANCE_MS
+            )
+            too_long = len(self.utterance) >= max_utterance_ms * RATE * 2 // 1000
             quiet = self.heard_speech and self.silence_ms >= SILENCE_MS
             if quiet or (too_long and self.heard_speech):
                 pcm = bytes(self.utterance)
                 self.utterance = bytearray()
-                self.state = "process"
-                self.process_started = asyncio.get_running_loop().time()
-                self.current_task = asyncio.create_task(self._handle_utterance(pcm))
-                self.tasks.add(self.current_task)
-                self.current_task.add_done_callback(self.tasks.discard)
+                if self.alarm_active:
+                    # Keep the microphone live: the next "стоп" must not be
+                    # lost while a TV phrase is being transcribed.
+                    self._queue_alarm_pcm(pcm)
+                    self.state = "listen"
+                    self._reset_listen_vad()
+                else:
+                    self.state = "process"
+                    self.process_started = asyncio.get_running_loop().time()
+                    self.current_task = asyncio.create_task(
+                        self._handle_utterance(pcm)
+                    )
+                    self.tasks.add(self.current_task)
+                    self.current_task.add_done_callback(self.tasks.discard)
             elif not self.heard_speech and len(self.utterance) >= NO_SPEECH_MS * RATE * 2 // 1000:
                 # triggered but nobody spoke: do not send silence to STT
                 log.info("no speech after trigger, back to idle")
                 self.utterance = bytearray()
-                self.state = "wake"
-                self._spawn(self._send_led("off"))
-                self._spawn(self._music_unduck())
+                if self.alarm_active:
+                    self.state = "listen"
+                    self._reset_listen_vad()
+                else:
+                    self.state = "wake"
+                    self._spawn(self._send_led("off"))
+                    self._spawn(self._music_unduck())
             return
 
         # "process": the AEC block above already handles barge-in while TTS
@@ -1628,6 +3102,46 @@ class Agent:
             self.preroll.append(mono.tobytes())
             if len(self.preroll) > max(1, PREROLL_MS // FRAME_MS):
                 self.preroll.pop(0)
+
+    def _queue_alarm_pcm(self, pcm: bytes) -> None:
+        queue = self.alarm_stt_queue
+        try:
+            queue.put_nowait(pcm)
+        except asyncio.QueueFull:
+            try:
+                queue.get_nowait()
+            except asyncio.QueueEmpty:
+                pass
+            try:
+                queue.put_nowait(pcm)
+            except asyncio.QueueFull:
+                pass
+
+    async def _alarm_stt_worker(self) -> None:
+        """Transcribe alarm audio continuously, without blocking microphone capture."""
+        while self.alarm_active:
+            pcm = await self.alarm_stt_queue.get()
+            if not self.alarm_active:
+                return
+            user_text = ""
+            try:
+                user_text, _ = await self._run_pipeline(pcm, stt_only=True)
+            except asyncio.CancelledError:
+                raise
+            except Exception:  # noqa: BLE001
+                log.exception("alarm stt failed")
+                continue
+            snooze_minutes = parse_snooze_text(user_text)
+            if snooze_minutes:
+                log.info("alarm snoozed by voice: %r", user_text)
+                await self.snooze_alarm(snooze_minutes)
+                return
+            if user_text and self._alarm_stop_requested(user_text):
+                log.info("alarm stopped by voice: %r", user_text)
+                await self.stop_alarm()
+                return
+            if user_text:
+                log.info("alarm listening: ignored %r", user_text)
 
     async def _handle_utterance(self, pcm: bytes) -> None:
         samples = np.frombuffer(pcm, dtype=np.int16).astype(np.float32)
@@ -1705,12 +3219,18 @@ class Agent:
                 # the player is already paused, and the next resume should be
                 # at the original level.
                 await self._music_unduck()
-                await self._send_led("off")
+                if not self.alarm_active:
+                    await self._send_led("off")
                 self.ww.reset()
                 self.feat.reset()
                 self.preroll.clear()
                 self.current_task = None
-                self.state = "wake"
+                if self.alarm_active:
+                    self.state = "listen"
+                    self.utterance = bytearray()
+                    self._reset_listen_vad()
+                else:
+                    self.state = "wake"
                 self.process_started = 0.0
                 self.speak_started = 0.0
                 self.last_play_end = asyncio.get_running_loop().time()
@@ -1825,11 +3345,36 @@ class ControlServer:
         self.agent._spawn(self.agent.announce(text))
         return web.json_response({"ok": True, "queued": True, "chars": len(text)})
 
+    async def timer(self, request: web.Request) -> web.Response:
+        result = await self.agent.timer_action(
+            request.query.get("action", "list"),
+            request.query.get("name", ""),
+            request.query.get("duration", ""),
+        )
+        return web.json_response(result)
+
+    async def alarm(self, request: web.Request) -> web.Response:
+        result = await self.agent.alarm_action(
+            request.query.get("action", "list"),
+            request.query.get("text", ""),
+        )
+        return web.json_response(result)
+
+    async def night(self, request: web.Request) -> web.Response:
+        result = await self.agent.night_action(
+            request.query.get("action", "status"),
+            request.query.get("text", ""),
+        )
+        return web.json_response(result)
+
     async def run(self) -> None:
         app = web.Application()
         app.router.add_get("/health", self.health)
         app.router.add_route("*", "/ptt", self.ptt)
         app.router.add_route("*", "/say", self.say)
+        app.router.add_route("*", "/timer", self.timer)
+        app.router.add_route("*", "/alarm", self.alarm)
+        app.router.add_route("*", "/night", self.night)
         runner = web.AppRunner(app)
         await runner.setup()
         site = web.TCPSite(runner, CONTROL_BIND, CONTROL_PORT)

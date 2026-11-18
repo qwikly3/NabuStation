@@ -1,0 +1,65 @@
+language: "ru"
+intents:
+  NabuTimerStart:
+    data:
+      - sentences:
+          - "заведи таймер на {duration}"
+          - "поставь таймер на {duration}"
+          - "включи таймер на {duration}"
+          - "таймер на {duration}"
+        lists:
+          duration:
+            wildcard: true
+
+  NabuTimerStartNamed:
+    data:
+      - sentences:
+          - "заведи таймер на {name} {duration}"
+          - "заведи таймер {name} на {duration}"
+          - "поставь таймер {name} на {duration}"
+          - "таймер {name} на {duration}"
+        lists:
+          name:
+            wildcard: true
+          duration:
+            wildcard: true
+
+  NabuTimerList:
+    data:
+      - sentences:
+          - "какие таймеры"
+          - "какие таймеры стоят"
+          - "список таймеров"
+          - "сколько осталось таймера"
+          - "что по таймерам"
+
+  NabuTimerCancel:
+    data:
+      - sentences:
+          - "отмени таймер"
+          - "убери таймер"
+          - "отмени таймер {name}"
+          - "убери таймер {name}"
+          - "отмени таймер на {name}"
+        lists:
+          name:
+            wildcard: true
+
+  NabuTimerCancelAll:
+    data:
+      - sentences:
+          - "отмени все таймеры"
+          - "убери все таймеры"
+          - "очисти таймеры"
+
+  NabuTimerExtend:
+    data:
+      - sentences:
+          - "продли таймер на {duration}"
+          - "продли таймер {name} на {duration}"
+          - "добавь таймеру {name} {duration}"
+        lists:
+          name:
+            wildcard: true
+          duration:
+            wildcard: true

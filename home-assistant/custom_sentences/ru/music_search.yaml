@@ -1,0 +1,28 @@
+language: "ru"
+intents:
+  NabuMusicSearchPlay:
+    data:
+      - sentences:
+          - "включи {kind} {query}"
+          - "поставь {kind} {query}"
+          - "запусти {kind} {query}"
+          - "найди и включи {kind} {query}"
+        lists:
+          kind:
+            values:
+              - in: "песню"
+                out: "track"
+              - in: "трек"
+                out: "track"
+              - in: "плейлист"
+                out: "playlist"
+              - in: "альбом"
+                out: "album"
+              - in: "исполнителя"
+                out: "artist"
+              - in: "подкаст"
+                out: "podcast"
+              - in: "аудиокнигу"
+                out: "audiobook"
+          query:
+            wildcard: true

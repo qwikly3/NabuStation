@@ -1,0 +1,22 @@
+language: "ru"
+intents:
+  NabuPlaylistAddCurrent:
+    data:
+      - sentences:
+          - "добавь текущий трек в плейлист {name}"
+          - "добавь эту песню в плейлист {name}"
+          - "добавь трек в плейлист {name}"
+          - "сохрани трек в плейлист {name}"
+        lists:
+          name:
+            wildcard: true
+
+  NabuPlaylistCreate:
+    data:
+      - sentences:
+          - "создай плейлист {name}"
+          - "создай новый плейлист {name}"
+          - "новый плейлист {name}"
+        lists:
+          name:
+            wildcard: true

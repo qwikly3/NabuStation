@@ -22,10 +22,16 @@ Copy the files you need from `home-assistant/packages/`:
 
 | File | Needed for |
 |---|---|
-| `nabustation_helpers.yaml` | always (media player, station IP, voice host, weather, Liked Songs URI) |
-| `nabustation_core.yaml` | music transport, queue, repeat, seek, similar, weather/time, announcements |
+| `nabustation_helpers.yaml` | always (media player, station IP, voice host, weather, statuses) |
+| `nabustation_core.yaml` | music transport, queue, repeat, seek, similar, weather/time, announcements, morning |
+| `nabustation_timers.yaml` | timers |
+| `nabustation_sleep.yaml` | sleep timer via Music Assistant |
+| `nabustation_alarms.yaml` | alarms, snooze, song override |
+| `nabustation_night.yaml` | night mode |
 | `nabustation_volume.yaml` | voice volume through the Debian station service |
-| `nabustation_spotify.yaml` | "включи музыку", like/unlike |
+| `nabustation_spotify.yaml` | "включи музыку", like/unlike, AI DJ hint |
+| `nabustation_search.yaml` | play track/album/artist/playlist/podcast/audiobook by name |
+| `nabustation_playlists.yaml` | create playlists, add current track |
 
 Example:
 
@@ -44,23 +50,32 @@ Copy only the matching files to `/config/custom_sentences/ru/`:
 
 | File | Needed for |
 |---|---|
-| `music_core.yaml` | pause/resume/next/previous/shuffle/now playing/stop, queue, repeat, seek, similar, weather/time, announcements |
+| `music_core.yaml` | pause/resume/next/previous/shuffle/now playing/stop, queue, repeat, seek, similar, weather/time, announcements, morning |
+| `timers.yaml` | timer phrases |
+| `sleep.yaml` | sleep timer phrases |
+| `alarms.yaml` | alarm phrases, snooze, song |
+| `night.yaml` | night mode phrases |
 | `volume.yaml` | "громкость 5", "громче", "тише" |
-| `music_spotify.yaml` | "включи музыку", "поставь лайк", "убери лайк" |
+| `music_spotify.yaml` | "включи музыку", like/unlike, DJ |
+| `music_search.yaml` | play by name |
+| `music_playlists.yaml` | playlist create/add |
 
 ```bash
 mkdir -p /config/custom_sentences/ru
 cp home-assistant/custom_sentences/ru/*.yaml /config/custom_sentences/ru/
 ```
 
-## 4. Spotify helper script
+## 4. Helper scripts
 
-Only for the Spotify module:
+Only for the modules you use:
 
 ```bash
 mkdir -p /config/scripts
 cp home-assistant/scripts/music_like.py /config/scripts/music_like.py
 cp home-assistant/scripts/music_queue.py /config/scripts/music_queue.py
+cp home-assistant/scripts/music_sleep.py /config/scripts/music_sleep.py
+cp home-assistant/scripts/music_play.py /config/scripts/music_play.py
+cp home-assistant/scripts/music_playlist.py /config/scripts/music_playlist.py
 cp home-assistant/nabustation.json.example /config/nabustation.json
 ```
 
@@ -79,9 +94,10 @@ has them. For a Core venv:
 pip install music-assistant-client aiohttp
 ```
 
-If `python3` in `shell_command` is not the HA venv, change the two
-`shell_command` lines in `nabustation_spotify.yaml` to the full path of the
-HA venv Python (for example `/srv/homeassistant/bin/python3`).
+If `python3` in `shell_command` is not the HA venv, change the
+`shell_command` lines in `nabustation_spotify.yaml`, `nabustation_search.yaml`
+and `nabustation_playlists.yaml` to the full path of the HA venv Python (for
+example `/srv/homeassistant/bin/python3`).
 
 ## 5. Restart / reload
 
@@ -115,6 +131,11 @@ Settings -> Devices & services -> Helpers:
 | `input_text.nabustation_weather_entity` | `weather.home` |
 | `input_text.nabustation_liked_playlist` | `library://playlist/12` |
 | `input_text.nabustation_last_result` | leave empty (reply of the last command) |
+| `input_text.nabustation_timers_status` | timer status |
+| `input_text.nabustation_sleep_status` | sleep timer status |
+| `input_text.nabustation_alarms_status` | alarm list |
+| `input_text.nabustation_next_alarm` | nearest alarm for morning summary |
+| `input_text.nabustation_night_status` | night mode status |
 
 Find the Music Assistant player entity in Developer Tools -> States
 (search for the Station 1 player). Find the Liked Songs URI with

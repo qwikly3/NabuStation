@@ -1,0 +1,67 @@
+# NabuStation: night mode on the voice server.
+# Turns off LEDs, pauses music, lowers the amplifier and restores the previous
+# volume at the configured morning exit time (default 10:00 local HA time).
+rest_command:
+  nabustation_night_on:
+    url: >-
+      http://{{ states('input_text.nabustation_voice_host')
+                 if states('input_text.nabustation_voice_host')
+                    not in ['unknown', 'unavailable', ''] else '127.0.0.1' }}:8090/night?action=on
+    method: GET
+    timeout: 10
+  nabustation_night_off:
+    url: >-
+      http://{{ states('input_text.nabustation_voice_host')
+                 if states('input_text.nabustation_voice_host')
+                    not in ['unknown', 'unavailable', ''] else '127.0.0.1' }}:8090/night?action=off
+    method: GET
+    timeout: 10
+  nabustation_night_status:
+    url: >-
+      http://{{ states('input_text.nabustation_voice_host')
+                 if states('input_text.nabustation_voice_host')
+                    not in ['unknown', 'unavailable', ''] else '127.0.0.1' }}:8090/night?action=status
+    method: GET
+    timeout: 10
+  nabustation_night_set_exit:
+    url: >-
+      http://{{ states('input_text.nabustation_voice_host')
+                 if states('input_text.nabustation_voice_host')
+                    not in ['unknown', 'unavailable', ''] else '127.0.0.1' }}:8090/night?action=set_exit&text={{ time | urlencode }}
+    method: GET
+    timeout: 10
+
+intent_script:
+  NabuNight:
+    speech:
+      text: >-
+        {% set value = states('input_text.nabustation_night_status') %}
+        {% if value in ['unknown', 'unavailable', ''] %}Ночной режим включён.{% else %}{{ value }}{% endif %}
+    action:
+      - action: rest_command.nabustation_night_on
+
+  NabuNightOff:
+    speech:
+      text: >-
+        {% set value = states('input_text.nabustation_night_status') %}
+        {% if value in ['unknown', 'unavailable', ''] %}Ночной режим выключен.{% else %}{{ value }}{% endif %}
+    action:
+      - action: rest_command.nabustation_night_off
+
+  NabuNightStatus:
+    speech:
+      text: >-
+        {% set value = states('input_text.nabustation_night_status') %}
+        {% if value in ['unknown', 'unavailable', ''] %}Ночной режим выключен.{% else %}{{ value }}{% endif %}
+    action:
+      - action: rest_command.nabustation_night_status
+
+  NabuNightExitSet:
+    speech:
+      text: >-
+        {% set value = states('input_text.nabustation_night_status') %}
+        {% if value in ['unknown', 'unavailable', ''] %}Время выхода изменено.{% else %}{{ value }}{% endif %}
+    action:
+      - action: rest_command.nabustation_night_set_exit
+        data:
+          time: "{{ time }}"
