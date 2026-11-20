@@ -1,5 +1,23 @@
 # Changelog
 
+## 1.1.1 - 2026-11-20
+
+Alarm reliability fix.
+
+- Alarm commands are handled locally in the voice server before Home
+  Assistant and Groq; they no longer depend on the LLM or the 8k TPM limit.
+- STT time variants are accepted: `1724`, `730`, `1200`, `12.0`, `7.3`,
+  `7 30`, `7-30` in addition to `12:00` / `12.00`.
+- Natural spoken confirmations without dotted dates and colons:
+  «Будильник на завтра в семнадцать часов двадцать четыре минуты поставлен.»
+- Global `HH:MM` normalization for all spoken replies (time, morning summary).
+- New `input_text.nabustation_alarm_reply` helper so the voice server can
+  speak the actual set/error result instead of a stale alarm list.
+- Local alarm list/cancel/stop recognizes variants such as «поставим»,
+  «оставь», «какие будильники», «такие будинки есть».
+- Correct Russian minute forms: «одну минуту», «две минуты», «тридцать одну
+  минуту».
+
 ## 1.1 - 2026-11-18
 
 Time & sleep, Spotify Connect and local music commands.

@@ -325,6 +325,16 @@ def num_to_words(n: int) -> str:
     return " ".join(parts)
 
 
+def num_to_words_f(n: int) -> str:
+    """Feminine forms for minutes: одну, две, двадцать две."""
+    words = num_to_words(n)
+    if n % 10 == 1 and n % 100 != 11 and words.endswith("один"):
+        words = words[:-4] + "одну"
+    elif n % 10 == 2 and n % 100 != 12 and words.endswith("два"):
+        words = words[:-3] + "две"
+    return words
+
+
 _LATIN_LETTER_NAMES = {
     "A": "эй", "B": "би", "C": "си", "D": "ди", "E": "и", "F": "эф",
     "G": "джи", "H": "эйч", "I": "ай", "J": "джей", "K": "кей",
@@ -605,14 +615,33 @@ def resolve_timezone(name: str | None):
     return datetime.now().astimezone().tzinfo
 
 
+def _clock_from_text(text: str) -> tuple[int, int] | None:
+    """Extract HH:MM from STT variants like 12:00, 12.0, 7 30 or 1724."""
+    match = re.search(r"(\d{1,2})[:.\s-](\d{1,2})(?!\d)", text)
+    if match:
+        hour = int(match.group(1))
+        minute_text = match.group(2)
+        minute = int(minute_text) * (10 if len(minute_text) == 1 else 1)
+        if 0 <= hour <= 23 and 0 <= minute <= 59:
+            return hour, minute
+    match = re.search(r"(?<!\d)(\d{3,4})(?!\d)", text)
+    if match:
+        digits = match.group(1)
+        hour = int(digits[:-2])
+        minute = int(digits[-2:])
+        if 0 <= hour <= 23 and 0 <= minute <= 59:
+            return hour, minute
+    return None
+
+
 def parse_time_text(text: str) -> tuple[int, int] | None:
     """Parse a Russian time phrase like 10:00, 9 утра or 9 вечера."""
     low = (text or "").strip().lower().replace("ё", "е")
     if not low:
         return None
-    match = re.search(r"(\d{1,2})[:.](\d{2})", low)
-    if match:
-        hour, minute = int(match.group(1)), int(match.group(2))
+    clock = _clock_from_text(low)
+    if clock:
+        hour, minute = clock
     else:
         match = re.search(
             r"(\d{1,2})\s*(утра|вечера|дня|ночи|час|часа|часов)\b", low
@@ -656,11 +685,11 @@ def parse_alarm_text(
             day, datetime.min.time(), tzinfo=local_tz
         ).replace(hour=hour, minute=minute)
 
-    # Time: 7:30, 7.30, 9 вечера, 9 утра.
+    # Time: 7:30, 7.30, 12.0, 9 вечера, 9 утра.
     hour = minute = None
-    match = re.search(r"(\d{1,2})[:.](\d{2})", text)
-    if match:
-        hour, minute = int(match.group(1)), int(match.group(2))
+    clock = _clock_from_text(text)
+    if clock:
+        hour, minute = clock
     else:
         match = re.search(
             r"(\d{1,2})\s*(утра|вечера|дня|ночи|час|часа|часов)\b", text
@@ -682,7 +711,6 @@ def parse_alarm_text(
             hour, minute = int(match.group(1)), 0
     if hour is None or not (0 <= hour <= 23) or not (0 <= minute <= 59):
         return None
-    alarm_time = (hour, minute)
 
     # Repeat weekdays.
     weekdays: list[int] = []
@@ -784,11 +812,33 @@ def parse_snooze_text(text: str) -> int | None:
 
 def format_minutes(count: int) -> str:
     n = abs(int(count))
-    if n % 10 == 1 and n % 100 != 11:
-        return f"{n} минуту"
-    if n % 10 in (2, 3, 4) and n % 100 not in (12, 13, 14):
-        return f"{n} минуты"
-    return f"{n} минут"
+    return f"{num_to_words_f(n)} {_plural(n, ('минуту', 'минуты', 'минут'))}"
+
+
+def spoken_time(hour: int, minute: int) -> str:
+    """Time without a colon so Silero reads it naturally."""
+    hours = f"{num_to_words(hour)} {_plural(hour, ('час', 'часа', 'часов'))}"
+    if minute == 0:
+        return hours
+    minutes = (
+        f"{num_to_words_f(minute)} "
+        f"{_plural(minute, ('минуту', 'минуты', 'минут'))}"
+    )
+    return f"{hours} {minutes}"
+
+
+def normalize_clock(text: str) -> str:
+    """Turn HH:MM into spoken words so TTS does not read the colon."""
+    def repl(match: re.Match) -> str:
+        hour, minute = int(match.group(1)), int(match.group(2))
+        if 0 <= hour <= 23 and 0 <= minute <= 59:
+            return " " + spoken_time(hour, minute) + " "
+        return match.group(0)
+
+    result = re.sub(r"(?<!\d)(\d{1,2}):(\d{2})(?!\d)", repl, text)
+    result = re.sub(r"\s+([,.;:!?])", r"\1", result)
+    result = re.sub(r"\s+", " ", result)
+    return result.strip()
 
 
 def format_remaining(seconds: int) -> str:
@@ -1385,6 +1435,78 @@ class Agent:
     def _reset_tts_gain_cache(self) -> None:
         return None
 
+    async def _alarm_command(self, text: str) -> str | None:
+        """Handle alarm phrases locally, before HA/LLM sees the text.
+
+        STT often writes «поставим будильник на 17.31» or mishears
+        «будильники» as «будинки».  Local matching here means those commands
+        never reach Groq and always get a spoken confirmation.
+        """
+        low = (text or "").lower().replace("ё", "е")
+        alarm_words = (
+            "будильник",
+            "будильники",
+            "будильников",
+            "будинк",
+            "будильн",
+            "будльник",
+            "будилник",
+        )
+        if not any(word in low for word in alarm_words):
+            return None
+        if any(
+            word in low
+            for word in ("песн", "трек", "плейлист", "альбом", "исполнител")
+        ):
+            return None
+        if any(
+            word in low
+            for word in (
+                "какие",
+                "какой",
+                "список",
+                "покажи",
+                "стоят",
+                "есть",
+                "что по",
+                "что с",
+                "когда",
+                "во сколько",
+                "включен",
+                "статус",
+            )
+        ):
+            return (await self.list_alarms())["text"]
+        if "все" in low and any(
+            word in low
+            for word in ("отмен", "убери", "удали", "сними", "выключ")
+        ):
+            return (await self.cancel_all_alarms())["text"]
+        if self.alarm_active and self._alarm_stop_requested(text):
+            return (await self.stop_alarm())["text"]
+        if any(
+            word in low
+            for word in ("отмен", "убери", "удали", "сними", "выключ")
+        ):
+            match = re.search(r"(\d{1,2})[:.\s-](\d{1,2})(?!\d)", low)
+            query = text
+            if match:
+                hour = int(match.group(1))
+                minute_text = match.group(2)
+                minute = int(minute_text) * (10 if len(minute_text) == 1 else 1)
+                if 0 <= hour <= 23 and 0 <= minute <= 59:
+                    query = f"{hour:02d}:{minute:02d}"
+            result = await self.cancel_alarm(query)
+            return result["text"]
+        if parse_alarm_text(text, tz=self.tz):
+            return (await self.set_alarm(text))["text"]
+        if any(
+            word in low
+            for word in ("постав", "завед", "остав", "разбуд", "включи")
+        ):
+            return "На какое время поставить будильник?"
+        return None
+
     async def _volume_command(self, text: str) -> str | None:
         """Handle media-volume requests locally, before HA/LLM sees the text."""
         t = (text or "").lower().replace("ё", "е")
@@ -1559,7 +1681,9 @@ class Agent:
                     if stt_only:
                         await ws.close()
                         return user_text, ""
-                    local_reply = await self._volume_command(user_text)
+                    local_reply = await self._alarm_command(user_text)
+                    if local_reply is None:
+                        local_reply = await self._volume_command(user_text)
                     if local_reply is None:
                         local_reply = await self._cast_command(user_text)
                     if local_reply:
@@ -2215,6 +2339,7 @@ class Agent:
     # --------------------------------------------------------------- alarms
     def _alarm_display(self, alarm: dict, at: float) -> str:
         dt = datetime.fromtimestamp(at, self.tz)
+        time_str = spoken_time(dt.hour, dt.minute)
         weekdays = sorted(alarm.get("weekdays") or [])
         if weekdays:
             if weekdays == list(range(5)):
@@ -2226,13 +2351,13 @@ class Agent:
             else:
                 names = [_WEEKDAY_DATIVE[index] for index in weekdays]
                 desc = "по " + ", ".join(names[:-1]) + " и " + names[-1] if len(names) > 1 else "по " + names[0]
-            return f"{desc} в {dt:%H:%M}"
+            return f"{desc} в {time_str}"
         today = datetime.now(self.tz).date()
         if dt.date() == today:
-            return f"сегодня в {dt:%H:%M}"
+            return f"сегодня в {time_str}"
         if dt.date() == today + timedelta(days=1):
-            return f"завтра в {dt:%H:%M}"
-        return f"{dt.day} {_MONTHS_RU[dt.month - 1]} в {dt:%H:%M}"
+            return f"завтра в {time_str}"
+        return f"{dt.day} {_MONTHS_RU[dt.month - 1]} в {time_str}"
 
     def _alarm_text(self) -> str:
         if self.alarm_active:
@@ -2547,6 +2672,16 @@ class Agent:
             },
         )
 
+    async def _update_alarm_reply(self, text: str) -> None:
+        await self._ha_call(
+            "input_text",
+            "set_value",
+            {
+                "entity_id": "input_text.nabustation_alarm_reply",
+                "value": text,
+            },
+        )
+
     def _find_alarm(self, query: str) -> dict | None:
         if not self.alarms:
             return None
@@ -2570,6 +2705,7 @@ class Agent:
     async def set_alarm(self, text: str) -> dict:
         parsed = parse_alarm_text(text, tz=self.tz)
         if not parsed:
+            await self._update_alarm_reply("Не понял дату и время будильника.")
             return {"ok": False, "text": "Не понял дату и время будильника."}
         async with self.alarm_lock:
             aid = uuid.uuid4().hex[:8]
@@ -2584,14 +2720,14 @@ class Agent:
             self._save_alarms()
             self._schedule_alarm(aid)
             await self._update_alarm_helper()
-            when = datetime.fromtimestamp(parsed["at"], self.tz).strftime(
-                "%d.%m %H:%M"
-            )
+            when = self._alarm_display(self.alarms[aid], parsed["at"])
+            reply = f"Будильник на {when} поставлен."
+            await self._update_alarm_reply(reply)
             return {
                 "ok": True,
                 "id": aid,
                 "at": parsed["at"],
-                "text": f"Будильник на {when} поставлен.",
+                "text": reply,
             }
 
     async def set_alarm_media(self, query: str) -> dict:
@@ -3173,7 +3309,9 @@ class Agent:
                 log.warning("empty reply (heard %r)", user_text)
             else:
                 reply_text = normalize_numbers(
-                    transliterate_latin(normalize_latin_letters(reply_text))
+                    transliterate_latin(
+                        normalize_latin_letters(normalize_clock(reply_text))
+                    )
                 )
                 log.info("tts: %s", reply_text)
                 sentences = split_sentences(reply_text)

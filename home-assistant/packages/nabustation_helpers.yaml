@@ -37,6 +37,10 @@ input_text:
     name: NabuStation alarms
     max: 255
     initial: "Будильников нет."
+  nabustation_alarm_reply:
+    name: NabuStation last alarm reply
+    max: 255
+    initial: "Будильник не задан."
   nabustation_next_alarm:
     name: NabuStation next alarm
     max: 255

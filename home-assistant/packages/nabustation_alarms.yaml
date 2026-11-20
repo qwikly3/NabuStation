@@ -54,7 +54,7 @@ intent_script:
   NabuAlarmSet:
     speech:
       text: >-
-        {% set value = states('input_text.nabustation_alarms_status') %}
+        {% set value = states('input_text.nabustation_alarm_reply') %}
         {% if value in ['unknown', 'unavailable', ''] %}Будильник поставлен.{% else %}{{ value }}{% endif %}
     action:
       - action: rest_command.nabustation_alarm_set
